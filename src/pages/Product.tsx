@@ -1,0 +1,402 @@
+// duidelik — Product screen (lifecycle view): the §7 product-lifecycle + FSD layouts,
+// plus QRG and Glossary tabs. Everything mutates via store.dispatch — never direct.
+// Ported from app/ui/Product.js (hyperscript → JSX).
+
+import { Fragment, useState } from "react";
+import { LifecycleStage, DocStatus, DocType } from "../core/enums";
+import type { DocTypeValue } from "../core/enums";
+import { sectionsFor } from "../components/docSchemas";
+import { DocSection } from "../components/fields";
+import { RigourGate, SignaturePanel, SignatureRecord, AiBar } from "../components/panels";
+import { LifecycleRail } from "../components/LifecycleRail";
+import type { Store, Intent, DispatchResult } from "../core/store";
+import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent } from "../types";
+import type { AiClient } from "../core/aiClient";
+
+const TABS: (DocTypeValue | "GLOSSARY")[] = [DocType.BRD, DocType.FSD, DocType.QRG, "GLOSSARY"];
+
+type DocFor = (type: DocTypeValue) => DuidelikDocument | null;
+type DispatchFn = (intent: Intent) => Promise<DispatchResult>;
+
+export function ProductScreen({
+  store,
+  state,
+  productId,
+  onBack,
+  aiClient,
+}: {
+  store: Store;
+  state: StoreGraph;
+  productId: string;
+  onBack: () => void;
+  aiClient: AiClient | null;
+}) {
+  const product = store.product(productId);
+  const [tab, setTab] = useState<DocTypeValue | "GLOSSARY">(DocType.BRD);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  if (!product)
+    return (
+      <div className="screen__body">
+        Product not found.{" "}
+        <a href="#" onClick={onBack}>
+          back
+        </a>
+      </div>
+    );
+
+  const docFor: DocFor = (type) => store.docOf(productId, type);
+  const resolveUser = store.resolveUser;
+  const actingUser = store.actingUser();
+  const owner = product.ownerId ? resolveUser(product.ownerId) : null;
+  const placementPath = pathFor(state, product);
+
+  const dispatch: DispatchFn = async (intent) => {
+    const res = (await store.dispatch(intent)) as DispatchResult;
+    if (res && (res as any).invalidation) setBanner((res as any).invalidation.banner);
+    if (res && res.ok === false) setBanner(res.message || res.code || null);
+    return res;
+  };
+
+  return (
+    <div className="screen du-root">
+      <div className="brand-strip" />
+      <div className="screen__body">
+        <div className="breadcrumb">{placementPath}</div>
+        <div className="row row--between row--end" style={{ marginTop: "6px" }}>
+          <div>
+            <div className="meta">{`${product.code} · Owner: ${owner ? owner.name : "—"}`}</div>
+            <h1 className="h1">{product.name}</h1>
+          </div>
+          <button className="btn btn--ghost" onClick={onBack}>
+            ← Registry
+          </button>
+        </div>
+
+        <div className="mt-6">
+          <LifecycleRail product={product} docFor={docFor} invalidatedBanner={banner} />
+        </div>
+
+        <div className="product-tabs" role="tablist">
+          {TABS.map((t) => (
+            <span
+              key={t}
+              role="tab"
+              aria-selected={tab === t}
+              className={"product-tab" + (tab === t ? " product-tab--active" : "")}
+              onClick={() => setTab(t)}
+            >
+              {tabLabel(t)}
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-4">
+          {tab === "GLOSSARY" ? (
+            <GlossaryTab store={store} state={state} productId={productId} />
+          ) : (
+            <DocTab
+              store={store}
+              state={state}
+              product={product}
+              docType={tab}
+              docFor={docFor}
+              resolveUser={resolveUser}
+              actingUser={actingUser}
+              placementPath={placementPath}
+              aiClient={aiClient}
+              aiBusy={aiBusy}
+              setAiBusy={setAiBusy}
+              dispatch={dispatch}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DocTab({
+  store,
+  state,
+  product,
+  docType,
+  docFor,
+  resolveUser,
+  actingUser,
+  placementPath,
+  aiClient,
+  aiBusy,
+  setAiBusy,
+  dispatch,
+}: {
+  store: Store;
+  state: StoreGraph;
+  product: DataProduct;
+  docType: DocTypeValue;
+  docFor: DocFor;
+  resolveUser: (id: string) => any;
+  actingUser: any;
+  placementPath: string;
+  aiClient: AiClient | null;
+  aiBusy: boolean;
+  setAiBusy: (b: boolean) => void;
+  dispatch: DispatchFn;
+}) {
+  const doc = docFor(docType);
+  if (!doc) return <CreateDocPanel product={product} docType={docType} docFor={docFor} dispatch={dispatch} />;
+
+  const checks = store.checksForDoc(doc.id);
+  const hasRun = doc.status !== DocStatus.DRAFT || checks.length > 0;
+  const sections = sectionsFor(docType);
+  const checkByKey = Object.fromEntries(checks.map((c) => [c.key, c]));
+  const signature = latestSignature(state, doc.id);
+  const signedBrd = docFor(DocType.BRD);
+  const signedBrdKeys = signedBrd && signedBrd.status === DocStatus.SIGNED ? Object.keys(signedBrd.content || {}) : [];
+  const ctx = { product, users: state.users, placementPath, signedBrdKeys };
+
+  const patch = (nextContent: DocContent) => dispatch({ type: "EDIT_DOCUMENT", documentId: doc.id, content: nextContent });
+
+  async function draft() {
+    if (!aiClient || !aiClient.isAvailable()) return;
+    setAiBusy(true);
+    try {
+      const content = await aiClient.draft(docType, product, { current: doc!.content });
+      await dispatch({ type: "EDIT_DOCUMENT", documentId: doc!.id, content });
+    } catch {
+      /* degrade silently; bar shows offline next render if transport died */
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function runRigour() {
+    if (doc!.status === DocStatus.DRAFT) await dispatch({ type: "START_RIGOUR", documentId: doc!.id });
+    await dispatch({ type: "RUN_RIGOUR", documentId: doc!.id });
+  }
+  async function sign() {
+    return dispatch({ type: "SIGN", documentId: doc!.id });
+  }
+
+  const centre = (
+    <div className="doc-shell">
+      <div className="doc-shell__head">
+        <div className="eyebrow eyebrow--teal">{`${docTypeTitle(docType)} · ${doc.status}`}</div>
+        <div className="doc-shell__head-meta">{signature ? <span className="hl">signed</span> : "editable"}</div>
+      </div>
+      <div className="doc-shell__body">
+        {sections.map((s) => (
+          <DocSection
+            key={s.id}
+            section={s}
+            content={doc.content || {}}
+            onPatch={patch}
+            ctx={ctx}
+            check={s.rigourKey ? checkByKey[s.rigourKey] : null}
+          />
+        ))}
+      </div>
+      <AiBar aiClient={aiClient} docType={docType} status={doc.status} busy={aiBusy} onDraft={() => draft()} />
+    </div>
+  );
+
+  const right =
+    docType === DocType.QRG ? (
+      <QrgPublishPanel doc={doc} dispatch={dispatch} productId={product.id} />
+    ) : (
+      <div className="stack gap-4">
+        {signature && doc.status === DocStatus.SIGNED ? (
+          <SignatureRecord signature={signature} resolveUser={resolveUser} />
+        ) : (
+          <Fragment>
+            <RigourGate
+              docType={docType}
+              checks={checks}
+              hasRun={hasRun}
+              onRunRigour={() => runRigour()}
+              onOverride={(check, note) => dispatch({ type: "APPLY_OVERRIDE", checkId: check.id!, note })}
+            />
+            <SignaturePanel doc={doc} checks={checks} actingUser={actingUser} onSign={() => sign()} />
+          </Fragment>
+        )}
+      </div>
+    );
+
+  return (
+    <div className="work-area" style={{ display: "grid", gridTemplateColumns: "1.55fr .95fr", gap: "16px" }}>
+      {centre}
+      {right}
+    </div>
+  );
+}
+
+function CreateDocPanel({
+  product,
+  docType,
+  docFor,
+  dispatch,
+}: {
+  product: DataProduct;
+  docType: DocTypeValue;
+  docFor: DocFor;
+  dispatch: DispatchFn;
+}) {
+  let can = true;
+  let why = "";
+  if (docType === DocType.BRD) {
+    can = product.stage === LifecycleStage.ONE_LINER;
+    why = can
+      ? "Create the BRD to start the lifecycle (AI can draft it from the one-liner)."
+      : "BRD already exists or product has advanced.";
+  } else if (docType === DocType.FSD) {
+    const brd = docFor(DocType.BRD);
+    can = !!brd && brd.status === DocStatus.SIGNED && product.stage === LifecycleStage.BRD;
+    why = can ? "BRD is signed — create the FSD." : "🔒 Locked: the BRD must be SIGNED before an FSD can be created (hard gate).";
+  } else if (docType === DocType.QRG) {
+    const fsd = docFor(DocType.FSD);
+    can = !!fsd && fsd.status === DocStatus.SIGNED && product.stage === LifecycleStage.FSD;
+    why = can ? "FSD is signed — create the QRG." : "🔒 Locked: the FSD must be SIGNED before a QRG can be created.";
+  }
+  const intent = { [DocType.BRD]: "CREATE_BRD", [DocType.FSD]: "CREATE_FSD", [DocType.QRG]: "CREATE_QRG" }[docType] as Intent["type"];
+  return (
+    <div className="card card--dashed" style={{ textAlign: "center" }}>
+      <div className="rigour-gate__sub" style={{ marginBottom: "12px" }}>
+        {why}
+      </div>
+      {can ? (
+        <button className="btn btn--primary" onClick={() => dispatch({ type: intent, productId: product.id } as Intent)}>
+          {`+ Create ${docType}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function QrgPublishPanel({ doc, dispatch, productId }: { doc: DuidelikDocument; dispatch: DispatchFn; productId: string }) {
+  if (doc.status === DocStatus.PUBLISHED) {
+    return (
+      <div className="card signature-panel">
+        <div className="eyebrow eyebrow--muted">Published</div>
+        <div className="sign-reason sign-reason--pass">✓ QRG published — product is LIVE.</div>
+      </div>
+    );
+  }
+  const canPublish = !!(doc.content && ((doc.content as any).summary || "").trim());
+  return (
+    <div className="stack gap-4">
+      <div className="card card--dashed" style={{ fontSize: ".78rem", color: "var(--label)" }}>
+        <div className="eyebrow eyebrow--muted" style={{ marginBottom: "8px" }}>
+          Rigour gate — QRG
+        </div>
+        No rigour checklist for the QRG in v1 — it is a usage guide, not a sign-off document.
+      </div>
+      <div className="card signature-panel">
+        <div className="eyebrow eyebrow--muted">Publish</div>
+        {canPublish ? (
+          <button className="btn--sign" onClick={() => dispatch({ type: "PUBLISH_QRG", productId })}>
+            ✓ Publish QRG
+          </button>
+        ) : (
+          <button className="btn--signblocked" disabled aria-disabled="true">
+            🔒 Publish QRG
+          </button>
+        )}
+        <div className={"sign-reason " + (canPublish ? "sign-reason--pass" : "sign-reason--amber")}>
+          {canPublish
+            ? "Publishing makes the guide live and moves the product to LIVE."
+            : "Add a summary — it is the one field required to publish."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGraph; productId: string }) {
+  const [term, setTerm] = useState("");
+  const [def, setDef] = useState("");
+  const [warn, setWarn] = useState<string | null>(null);
+  const terms = state.glossaryTerms
+    .filter((t) => t.dataProductId === productId)
+    .sort((a, b) => a.term.localeCompare(b.term));
+
+  const add = async () => {
+    const res = (await store.dispatch({ type: "ADD_GLOSSARY_TERM", productId, term, definition: def })) as any;
+    if (res.ok) {
+      setTerm("");
+      setDef("");
+      setWarn(res.duplicateWarning ? `Note: "${res.term.term}" duplicates an existing term.` : null);
+    } else setWarn(res.message);
+  };
+
+  return (
+    <div className="card" style={{ borderTopLeftRadius: 0 }}>
+      <div className="row row--between" style={{ marginBottom: "14px" }}>
+        <div>
+          <div className="eyebrow eyebrow--teal">{`Glossary — ${terms.length} term${terms.length === 1 ? "" : "s"}`}</div>
+          <div className="rigour-gate__sub" style={{ margin: "4px 0 0" }}>
+            Plain-language definitions scoped to this product. Editable at any stage — no gate.
+          </div>
+        </div>
+      </div>
+      <div className="card card--subtle" style={{ marginBottom: "14px" }}>
+        <div className="row gap-4" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="field" style={{ flex: "1 1 180px" }}>
+            <label className="field__label">Term</label>
+            <input className="field__input" value={term} onChange={(e) => setTerm(e.target.value)} />
+          </div>
+          <div className="field" style={{ flex: "3 1 320px" }}>
+            <label className="field__label">Definition</label>
+            <input className="field__input" value={def} onChange={(e) => setDef(e.target.value)} />
+          </div>
+          <button className="btn btn--ai" disabled={!term.trim() || !def.trim()} onClick={add}>
+            Save term
+          </button>
+        </div>
+        {warn ? (
+          <div className="rigour-gate__sub" style={{ marginTop: "8px", color: "var(--amber)" }}>
+            {warn}
+          </div>
+        ) : null}
+      </div>
+      <div className="glossary-list">
+        {terms.length === 0 ? (
+          <div className="rigour-gate__sub">No terms yet.</div>
+        ) : (
+          terms.map((t) => (
+            <div className="glossary-term" key={t.id}>
+              <div className="glossary-term__term">{t.term}</div>
+              <div className="glossary-term__def">{t.definition}</div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── helpers ──
+function tabLabel(t: string) {
+  return t === "GLOSSARY" ? "Glossary" : t;
+}
+function docTypeTitle(t: string) {
+  return (
+    (
+      {
+        BRD: "Business Requirement Document",
+        FSD: "Functional Specification Document",
+        QRG: "Quick Reference Guide",
+      } as Record<string, string>
+    )[t] || t
+  );
+}
+function pathFor(state: StoreGraph, product: DataProduct) {
+  const sd = state.subDomains.find((s) => s.id === product.subDomainId);
+  const dom = sd && state.domains.find((d) => d.id === sd.domainId);
+  const str = dom && state.streams.find((s) => s.id === dom.streamId);
+  return ["duidelik", str && str.name, dom && dom.name, sd && sd.name].filter(Boolean).join(" › ");
+}
+function latestSignature(state: StoreGraph, documentId: string): Signature | null {
+  const sigs = state.signatures.filter((s) => s.documentId === documentId);
+  return sigs.length ? sigs[sigs.length - 1] : null;
+}

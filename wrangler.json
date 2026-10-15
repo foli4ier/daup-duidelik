@@ -1,0 +1,17 @@
+{
+  "name": "daup-duidelik",
+  "main": "worker/index.ts",
+  "compatibility_date": "2024-09-23",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [
+    {
+      "pattern": "duidelik.daup.co.za",
+      "custom_domain": true
+    }
+  ]
+}

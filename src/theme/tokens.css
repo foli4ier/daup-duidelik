@@ -1,0 +1,82 @@
+/* duidelik — design tokens (v1)
+ * Shoprite dark theme. Extracted verbatim from the three approved mockups.
+ * Owner: duidelik-ux. Lift this file wholesale into the builder's bundle.
+ * Every value here is referenced by components.css — do not inline hexes elsewhere.
+ */
+:root {
+  /* ---- 2.1 Brand ---- */
+  --r: #e30613;            /* brand red  — CTA / destructive / strip-left */
+  --t: #008b83;            /* brand teal — GREEN / signed / progress start */
+  --a: #47eadf;            /* accent     — active / links / AI / progress end */
+  --m: #c7cdd1;            /* muted body text, section labels */
+
+  /* ---- 2.2 Status palette (bind to Score + DocStatus) ---- */
+  --pass: #008b83;         /* GREEN  — Score.GREEN, DocStatus.SIGNED */
+  --amber: #ffb020;        /* AMBER  — Score.AMBER (needs override note) */
+  --amber-text: #f0d9ad;   /* amber text on amber-tint surface */
+  --red: #ff6672;          /* RED    — Score.RED, ERR_RED_BLOCKS */
+  --red-soft: #ffb3ba;     /* red body text on red-tint surface */
+  --active: #47eadf;       /* in-progress / drafting */
+  --locked: #8a9199;       /* locked / future / disabled */
+
+  /* ---- 2.3 Surfaces & text (near-black glass) ---- */
+  --glow-teal: radial-gradient(circle at 90% 6%, #008b8330, transparent 24%);
+  --glow-red:  radial-gradient(circle at 4% 96%, #e3061330, transparent 30%);
+  --bg: var(--glow-teal), var(--glow-red),
+        linear-gradient(135deg, #090909, #181818 60%, #050505);
+  --card: #ffffff0c;       /* glass card fill (default) */
+  --card-list: #ffffff0e;  /* brighter fill for list/product cards */
+  --card-2: #ffffff08;     /* secondary / subtle card */
+  --border: #ffffff1d;     /* card border */
+  --border-soft: #ffffff14;/* internal dividers */
+  --border-dashed: #ffffff22; /* dashed callout border */
+  --panel-dark: #0000004d; /* inset dark panel (rigour preview bg) */
+  --panel-black: #0a0f11;  /* ERD canvas bg */
+  --fg: #ffffff;           /* primary text */
+  --fg-2: #dfe4e7;         /* document body text */
+  --fg-3: #a8b0b7;         /* metadata (code · owner) */
+  --label: #8a9199;        /* de-emphasised labels, counts */
+  --label-teal: #72f8ee;   /* uppercase section eyebrow */
+
+  /* ---- 2.4 Tints ---- */
+  --tint-teal: #008b8318;
+  --tint-teal-strong: #008b8322;
+  --tint-accent: #47eadf22;
+  --tint-amber: #ffb02018;
+  --tint-red: #e3061315;
+  --tint-red-strong: #e3061325;
+  --tint-ai: linear-gradient(135deg, #008b8322, #47eadf12);
+  --border-teal: #008b8344;
+  --border-accent: #47eadf55;
+  --border-red: #e3061366;
+
+  /* ---- 3. Type ---- */
+  --font: Inter, "Segoe UI", Arial, sans-serif;
+  --fs-display: 2.6rem;
+  --fs-h1: 1.9rem;
+  --fs-lead: 0.95rem;
+  --fs-card-title: 1.08rem;
+  --fs-body: 0.86rem;
+  --fs-sm: 0.8rem;
+  --fs-chip: 0.68rem;
+  --fs-eyebrow: 0.68rem;
+  --fs-meta: 0.72rem;
+
+  /* ---- 4. Spacing (4px base) ---- */
+  --sp-1: 4px;  --sp-2: 6px;  --sp-3: 8px;  --sp-4: 12px; --sp-5: 14px;
+  --sp-6: 16px; --sp-7: 18px; --sp-8: 22px; --sp-9: 26px;
+
+  /* ---- Radius ---- */
+  --rad-screen: 16px;
+  --rad-card: 14px;
+  --rad-md: 12px;
+  --rad-sm: 10px;
+  --rad-xs: 8px;
+  --rad-pill: 99px;
+
+  /* ---- Elevation & motion ---- */
+  --shadow: 0 8px 30px #0008;
+  --glow-dot: 0 0 16px var(--t);
+  --ease: cubic-bezier(.2,.7,.3,1);
+  --dur: 160ms;
+}

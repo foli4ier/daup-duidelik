@@ -1,0 +1,325 @@
+/* duidelik — component library (v1)
+ * Class-driven, framework-free. Lift wholesale; the builder's React components
+ * wrap these classes and must NOT restyle inline. Depends on tokens.css.
+ * Every component is documented in docs/DESIGN-SYSTEM.md §6 and shown in gallery.html.
+ */
+
+/* ============================================================ base */
+* { box-sizing: border-box; }
+.du-root { font-family: var(--font); color: var(--fg); }
+
+/* ---- 5. The brand frame ---- */
+.screen {
+  position: relative;
+  min-height: 640px;
+  border-radius: var(--rad-screen);
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+}
+.brand-strip {
+  height: 7px;
+  background: linear-gradient(90deg, var(--r) 0 46%, #fff 46% 49%, var(--t) 49%);
+}
+.screen__body { padding: var(--sp-8) var(--sp-9); }
+
+/* ---- generic flex/grid helpers used by screens ---- */
+.row { display: flex; align-items: center; }
+.row--between { justify-content: space-between; }
+.row--end { align-items: flex-end; }
+.stack { display: flex; flex-direction: column; }
+.gap-2 { gap: var(--sp-2); } .gap-3 { gap: var(--sp-3); }
+.gap-4 { gap: var(--sp-4); } .gap-6 { gap: var(--sp-6); }
+.mt-4 { margin-top: var(--sp-4); } .mt-6 { margin-top: var(--sp-6); }
+
+/* ============================================================ 6.1 card */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--rad-card);
+  padding: var(--sp-6);
+}
+.card--list   { background: var(--card-list); }
+.card--subtle { background: var(--card-2); }
+.card--dashed { background: var(--card-2); border: 1px dashed var(--border-dashed); }
+.card--accent-left { border-left: 5px solid var(--accent, var(--t)); }
+
+/* ============================================================ 6.2 eyebrow */
+.eyebrow {
+  font-size: var(--fs-eyebrow);
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.eyebrow--teal  { color: var(--label-teal); }
+.eyebrow--muted { color: var(--label); letter-spacing: .1em; }
+
+/* metadata line + titles */
+.meta { font-size: var(--fs-meta); font-weight: 800; letter-spacing: .08em; color: var(--fg-3); }
+.h1 { margin: 3px 0 0; font-size: var(--fs-h1); letter-spacing: -.04em; font-weight: 800; }
+.wordmark { margin: 10px 0 2px; font-size: var(--fs-display); letter-spacing: -.05em; line-height: 1; font-weight: 800; }
+.wordmark .dot { color: var(--r); }
+.lead { margin: 0; color: var(--m); font-size: var(--fs-lead); }
+.lead .hl { color: var(--a); }
+
+/* ============================================================ 6.3 chip */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-chip); font-weight: 900;
+  padding: 5px 10px; border-radius: var(--rad-pill);
+  white-space: nowrap;
+}
+.chip--signed  { background: var(--t); color: #fff; }
+.chip--active  { background: var(--tint-accent); color: var(--a); border: 1px solid var(--border-accent); }
+.chip--blocked { background: var(--tint-red-strong); color: var(--red); }
+.chip--locked  { background: #ffffff10; color: var(--locked); }
+
+/* ============================================================ 6.4 lifecycle rail */
+.lifecycle-rail { display: flex; align-items: center; gap: 4px; font-size: .74rem; font-weight: 800; }
+.rail-node { padding: 7px 14px; border-radius: var(--rad-pill); white-space: nowrap; }
+.rail-node--done     { background: var(--t); color: #fff; }
+.rail-node--active   { background: var(--tint-accent); color: var(--a); border: 1px solid var(--border-accent); }
+.rail-node--locked   { background: #ffffff10; color: var(--locked); border: 1px solid #ffffff1a; }
+.rail-node--future   { background: #ffffff10; color: var(--locked); }
+.rail-node--invalidated { background: var(--tint-red); color: var(--red); border: 1px dashed var(--border-red); }
+.rail-node .sub { opacity: .75; font-weight: 700; }
+.rail-conn { flex: 0 0 24px; height: 2px; background: #333; }
+.rail-conn--done  { background: var(--t); }   /* preceding stage signed */
+.rail-conn--near  { background: #444; }        /* next stage reachable */
+
+/* invalidation banner */
+.invalidation-banner {
+  margin-top: var(--sp-4); padding: 10px 14px;
+  background: var(--tint-red); border: 1px dashed var(--border-red);
+  border-radius: var(--rad-sm); color: var(--red); font-size: .78rem; font-weight: 700;
+}
+
+/* ============================================================ 6.5 pipeline (card variant) */
+.pipeline { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-5); font-size: .72rem; font-weight: 800; }
+.pipeline__node { padding: 5px 11px; border-radius: var(--rad-pill); }
+.pipeline__node--done   { background: var(--t); color: #fff; }
+.pipeline__node--active { background: var(--tint-accent); color: var(--a); border: 1px solid var(--border-accent); }
+.pipeline__node--blocked{ background: var(--tint-red-strong); color: var(--red); border: 1px solid var(--border-red); }
+.pipeline__node--locked { background: #ffffff10; color: var(--locked); }
+.pipeline__node--future { background: #ffffff10; color: var(--locked); }
+.pipeline__conn { color: #555; }
+
+/* ============================================================ 6.6 product card */
+.product-card { margin-bottom: var(--sp-4); }
+.product-card__meta { font-size: .7rem; color: var(--fg-3); font-weight: 800; letter-spacing: .08em; }
+.product-card__title { font-size: var(--fs-card-title); font-weight: 800; margin-top: 3px; }
+
+/* ============================================================ 6.7 domain tree */
+.domain-tree { font-size: .9rem; line-height: 1.9; }
+.tree-node { border-radius: 8px; }
+.tree-node--stream { font-weight: 800; color: #fff; }
+.tree-node--group  { padding-left: 14px; color: var(--m); }
+.tree-node--leaf   { padding-left: 28px; color: var(--fg-2); cursor: pointer; }
+.tree-node--leaf .count { color: var(--label); }
+.tree-node--selected { background: #e3061322; border-radius: 8px; }
+.tree-caret { display: inline-block; width: 1em; }
+
+/* ============================================================ 6.8 doc shell */
+.doc-shell { background: var(--card); border: 1px solid var(--border); border-radius: var(--rad-card); overflow: hidden; }
+.doc-shell__head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border-soft);
+}
+.doc-shell__head-meta { font-size: .7rem; color: var(--label); }
+.doc-shell__head-meta .hl { color: var(--a); font-weight: 800; }
+.doc-shell__body { padding: 14px 16px; font-size: var(--fs-body); line-height: 1.5; }
+
+/* ============================================================ 6.9 doc section + field callout */
+.doc-section { margin-bottom: 12px; }
+.doc-section__label { color: var(--label); font-weight: 800; font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+.doc-section__value { margin: 4px 0 0; color: var(--fg-2); }
+.field-callout { margin: 4px 0 0; padding: 7px 10px; border-radius: var(--rad-xs); border-left: 3px solid; }
+.field-callout--amber { background: var(--tint-amber); border-left-color: var(--amber); color: var(--amber-text); }
+.field-callout--red   { background: var(--tint-red);   border-left-color: var(--r);     color: var(--red-soft); }
+
+/* ============================================================ 6.10 AI co-author bar */
+.ai-bar {
+  margin: 4px 12px 14px; padding: 12px 14px;
+  background: var(--tint-ai); border: 1px solid #47eadf33; border-radius: var(--rad-md);
+}
+.ai-bar__head { display: flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 900; color: var(--a); }
+.ai-bar__head .glyph { font-size: 1rem; }
+.ai-bar__head .ctx { font-size: .68rem; font-weight: 700; color: var(--label); }
+.ai-bar__msg { margin-top: 7px; font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.45; }
+.ai-bar__actions { display: flex; gap: 8px; margin-top: 10px; }
+/* graceful-degradation state (STACK §6-B) */
+.ai-bar--offline { background: #ffffff08; border-color: var(--border); }
+.ai-bar--offline .ai-bar__head { color: var(--locked); }
+.ai-bar--offline .ai-bar__msg  { color: var(--label); }
+
+/* ============================================================ 6.11 rigour gate */
+.rigour-gate .eyebrow { display: block; }
+.rigour-gate__sub { font-size: .72rem; color: var(--label); margin-bottom: 10px; }
+.rigour-rows { font-size: .84rem; line-height: 2.1; }
+.rigour-row { display: flex; align-items: baseline; gap: 7px; }
+.rigour-row .qual { color: var(--label); font-size: .74rem; }
+.dot { width: 1em; display: inline-block; }
+.dot--pass  { color: var(--pass); }
+.dot--amber { color: var(--amber); }
+.dot--red   { color: var(--red); }
+.rigour-progress { margin-top: 10px; height: 7px; border-radius: var(--rad-pill); background: var(--border-soft); overflow: hidden; }
+.rigour-progress__fill { height: 100%; background: linear-gradient(90deg, var(--t), var(--a)); }
+.rigour-tally { font-size: .72rem; color: var(--label); margin-top: 5px; }
+
+/* amber override note (expanded state) */
+.override-note { margin: 6px 0 2px 1.2em; padding: 8px 10px; background: var(--tint-amber); border: 1px solid #ffb02044; border-radius: var(--rad-xs); }
+.override-note__label { font-size: .68rem; font-weight: 800; color: var(--amber-text); text-transform: uppercase; letter-spacing: .06em; }
+.override-note textarea {
+  width: 100%; margin-top: 6px; resize: vertical; min-height: 46px;
+  background: #00000033; border: 1px solid #ffb02033; border-radius: 6px;
+  color: var(--fg-2); font-family: var(--font); font-size: .78rem; padding: 6px 8px;
+}
+.override-note__hint { font-size: .68rem; color: var(--label); margin-top: 4px; }
+
+/* compact preview (on product cards) */
+.rigour-preview { margin-top: var(--sp-5); padding: 12px 14px; background: var(--panel-dark); border: 1px dashed var(--border-dashed); border-radius: var(--rad-md); }
+.rigour-preview__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 18px; font-size: .8rem; }
+.rigour-preview__summary { margin-top: 10px; font-size: .74rem; color: var(--red); }
+
+/* ============================================================ 6.12 signature panel */
+.signature-panel .eyebrow { margin-bottom: 8px; display: block; }
+.btn--sign, .btn--signamber, .btn--signblocked {
+  width: 100%; border: 0; border-radius: var(--rad-sm); padding: 12px;
+  font-weight: 800; font-size: .84rem; font-family: var(--font);
+}
+.btn--sign        { background: var(--t); color: #fff; cursor: pointer; }
+.btn--signamber   { background: linear-gradient(90deg, var(--a), var(--t)); color: #000; cursor: pointer; }
+.btn--signblocked { background: #ffffff10; color: var(--locked); border: 1px solid #ffffff1f; cursor: not-allowed; }
+.sign-reason { font-size: .74rem; margin-top: 8px; line-height: 1.4; }
+.sign-reason--red   { color: var(--red); }
+.sign-reason--amber { color: var(--amber); }
+.sign-reason--pass  { color: var(--pass); }
+.sign-footnote { font-size: .68rem; color: var(--label); margin-top: 8px; border-top: 1px solid var(--border-soft); padding-top: 8px; }
+
+/* ============================================================ 6.13 signature record (signed, immutable) */
+.signature-record { border-left: 4px solid var(--t); background: var(--tint-teal); border-radius: var(--rad-xs); padding: 10px 12px; }
+.signature-record__who { font-size: .82rem; font-weight: 800; color: var(--fg-2); }
+.signature-record__who .role { color: var(--a); }
+.signature-record__meta { font-size: .72rem; color: var(--label); margin-top: 4px; }
+.signature-record .lock { color: var(--t); }
+
+/* signed-BRD summary strip (cross-doc view on FSD) */
+.signed-summary {
+  margin-top: var(--sp-5); padding: 10px 14px;
+  background: var(--tint-teal); border: 1px solid var(--border-teal);
+  border-radius: var(--rad-sm); display: flex; align-items: center; gap: 12px; font-size: .78rem;
+}
+.signed-summary__tag { font-weight: 900; color: var(--a); white-space: nowrap; }
+.signed-summary__body { color: var(--fg-2); }
+.signed-summary__expand { color: var(--label); margin-left: auto; white-space: nowrap; cursor: pointer; }
+
+/* ============================================================ 6.14 data-model table */
+.data-model-table { width: 100%; margin: 8px 0 14px; border-collapse: collapse; font-size: .8rem; }
+.data-model-table th { padding: 6px 8px; font-weight: 800; font-size: .68rem; letter-spacing: .06em; color: var(--label); text-align: left; }
+.data-model-table thead tr { border-bottom: 1px solid var(--border-soft); }
+.data-model-table td { padding: 7px 8px; color: var(--fg-2); }
+.data-model-table tbody tr { border-bottom: 1px solid #ffffff0c; }
+.data-model-table tbody tr:last-child { border-bottom: 0; }
+.entity-glyph { color: var(--a); }
+.entity-glyph--amber { color: var(--amber); }
+.cell-tbd { color: var(--amber); font-style: italic; }
+.brd-ref--ok   { color: var(--t); }
+.brd-ref--warn { color: var(--amber); }
+
+/* ============================================================ 6.15 ERD canvas */
+.erd-canvas { margin: 10px 0 14px; padding: 18px; background: var(--panel-black); border: 1px solid #ffffff18; border-radius: var(--rad-md); text-align: center; }
+.erd-canvas svg { width: 100%; max-width: 560px; height: auto; }
+.erd-canvas--empty { color: var(--label); font-size: .82rem; padding: 28px 18px; }
+
+/* ============================================================ 6.16 buttons */
+.btn {
+  cursor: pointer; border-radius: var(--rad-sm); padding: 7px 12px;
+  font-weight: 800; font-size: .76rem; font-family: var(--font); border: 0;
+}
+.btn--primary { background: var(--r); color: #fff; }
+.btn--ai      { background: var(--a); color: #052; }
+.btn--ghost   { background: #ffffff14; color: #fff; border: 1px solid #ffffff2a; }
+.btn--block   { width: 100%; display: block; padding: 10px; font-size: .82rem; }
+.btn:disabled { cursor: not-allowed; opacity: .9; }
+
+/* ============================================================ 6.17 breadcrumb */
+.breadcrumb { font-size: var(--fs-meta); color: var(--label); font-weight: 700; }
+
+/* ============================================================ 6.18 NFR grid */
+.nfr-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px; font-size: .8rem; }
+.nfr-tile { padding: 8px 10px; background: var(--card-2); border-radius: var(--rad-xs); }
+.nfr-tile__label { color: var(--label); font-size: .68rem; display: block; }
+.nfr-tile__value { color: var(--fg-2); font-weight: 700; }
+
+/* ============================================================ 6.19 traceability panel */
+.traceability-panel .eyebrow { margin-bottom: 8px; display: block; }
+.traceability-panel__list { font-size: .78rem; line-height: 1.9; }
+.traceability-panel__list .ok   { color: var(--t); }
+.traceability-panel__list .warn { color: var(--amber); }
+.traceability-panel__list .sub  { color: var(--label); font-size: .72rem; }
+
+/* ============================================================ 6.20 acting-as picker */
+.acting-as { position: relative; }
+.acting-as__current {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 6px 12px; background: #ffffff10; border: 1px solid var(--border);
+  border-radius: var(--rad-pill); font-size: .76rem; font-weight: 800;
+}
+.acting-as__role { font-size: .62rem; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: var(--rad-pill); background: var(--tint-accent); color: var(--a); }
+.acting-as__menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+  min-width: 240px; background: #121617; border: 1px solid var(--border);
+  border-radius: var(--rad-md); box-shadow: var(--shadow); padding: 6px; overflow: hidden;
+}
+.acting-as__item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--rad-xs); cursor: pointer; font-size: .8rem; }
+.acting-as__item:hover { background: #ffffff10; }
+.acting-as__item--current { background: var(--tint-accent); }
+
+/* ============================================================ modal overlay (registration) */
+.overlay { position: absolute; inset: 0; background: #000a; display: flex; align-items: center; justify-content: center; z-index: 40; }
+.modal { width: min(560px, 92%); background: #0f1314; border: 1px solid var(--border); border-radius: var(--rad-card); box-shadow: var(--shadow); overflow: hidden; }
+.modal__head { padding: 14px 18px; border-bottom: 1px solid var(--border-soft); display: flex; justify-content: space-between; align-items: center; }
+.modal__title { font-size: 1.05rem; font-weight: 800; }
+.modal__body { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.modal__foot { padding: 14px 18px; border-top: 1px solid var(--border-soft); display: flex; justify-content: flex-end; gap: 10px; }
+
+/* form fields (registration, glossary add) */
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field__label { font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--label); }
+.field__input, .field__select, .field__textarea {
+  background: #00000033; border: 1px solid var(--border); border-radius: var(--rad-xs);
+  color: var(--fg); font-family: var(--font); font-size: .86rem; padding: 9px 11px;
+}
+.field__textarea { resize: vertical; min-height: 60px; }
+.field__input:focus, .field__select:focus, .field__textarea:focus { outline: 2px solid var(--a); outline-offset: 1px; border-color: var(--a); }
+
+/* glossary */
+.glossary-list { display: flex; flex-direction: column; gap: 8px; }
+.glossary-term { padding: 12px 14px; background: var(--card-2); border: 1px solid var(--border); border-radius: var(--rad-xs); }
+.glossary-term__term { font-weight: 800; color: var(--fg); font-size: .9rem; }
+.glossary-term__def  { color: var(--fg-2); font-size: .82rem; margin-top: 3px; line-height: 1.4; }
+.glossary-term__edit { float: right; color: var(--label); font-size: .72rem; cursor: pointer; }
+
+/* product tabs (BRD / FSD / QRG / Glossary) */
+.product-tabs { display: flex; gap: 4px; margin-top: var(--sp-4); font-size: .76rem; font-weight: 800; }
+.product-tab { padding: 7px 14px; border-radius: var(--rad-sm) var(--rad-sm) 0 0; color: var(--label); cursor: pointer; }
+.product-tab--active { color: var(--fg); background: var(--card); border: 1px solid var(--border); border-bottom: 0; }
+
+/* footer caption on mockups */
+.screen-caption { margin-top: var(--sp-5); font-size: .72rem; color: var(--label); text-align: center; }
+
+/* ============================================================ accessibility */
+:where(button, a, [tabindex], input, select, textarea):focus-visible {
+  outline: 2px solid var(--a); outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+
+/* ============================================================ responsive */
+@media (max-width: 860px) {
+  .work-area { grid-template-columns: 1fr !important; }
+  .registry-grid { grid-template-columns: 1fr !important; }
+  .lifecycle-rail { flex-wrap: wrap; }
+}
