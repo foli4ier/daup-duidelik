@@ -210,14 +210,25 @@ export function AiBar({
   docType,
   onDraft,
   busy,
+  online: onlineOverride,
 }: {
   aiClient: AiClient | null;
   docType: DocTypeValue;
   status?: string;
   onDraft: () => void;
   busy?: boolean;
+  /**
+   * Runtime reachability override. `isAvailable()` only reports whether a transport is
+   * WIRED, not whether it WORKS — so a wired-but-unreachable AI route (e.g. the P5
+   * /ai/* Worker route not built yet in local dev) would otherwise keep showing the
+   * online bar with a dead Draft button. The page flips this to false after a draft
+   * call fails, so the bar degrades to the offline state (DESIGN-SYSTEM §6.10). Omit =
+   * fall back to transport-wired. (STACK §4: the app is never blocked on AI.)
+   */
+  online?: boolean;
 }) {
-  const online = !!(aiClient && aiClient.isAvailable && aiClient.isAvailable());
+  const wired = !!(aiClient && aiClient.isAvailable && aiClient.isAvailable());
+  const online = onlineOverride === undefined ? wired : onlineOverride && wired;
   if (!online) {
     return (
       <div className="ai-bar ai-bar--offline">

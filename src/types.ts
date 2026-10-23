@@ -53,6 +53,13 @@ export interface DataProduct {
   createdAt: string;
   updatedAt: string;
   createdById?: string | null;
+  // Archive (schemaVersion ≥ 3). A PO may archive a product to hide it from the
+  // registry list WITHOUT destroying its documents/signatures — the audit trail stays
+  // intact (RIGOUR §3: signatures are immutable). Absent/null = active. Set to an ISO
+  // timestamp when archived; cleared (null) on unarchive. There is deliberately no
+  // hard delete in v1 — archiving is the reversible, audit-safe alternative.
+  archivedAt?: string | null;
+  archivedById?: string | null;
 }
 
 // `Document.content` is structured JSON whose per-doc-type section shape is owned by

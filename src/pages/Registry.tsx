@@ -6,7 +6,7 @@
 // Ported from app/ui/Registry.js (hyperscript → JSX).
 
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, MouseEvent } from "react";
 import { LifecycleStage, DocStatus, DocType, Score } from "../core/enums";
 import { Pipeline } from "../components/LifecycleRail";
 import type { Store } from "../core/store";
@@ -23,10 +23,16 @@ export function Registry({
 }) {
   const [selectedSub, setSelectedSub] = useState<string | null>(firstSubWithProducts(state));
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [openStreams, setOpenStreams] = useState<Set<string>>(() => new Set(state.streams.map((s) => s.id)));
   const [openDomains, setOpenDomains] = useState<Set<string>>(() => new Set(domainsWithProducts(state)));
 
-  const productsInSub = (subId: string) => state.dataProducts.filter((p) => p.subDomainId === subId);
+  const canAdmin = store.isPO();
+  // Active products in a sub-domain (archived hidden unless the PO toggles them on).
+  const productsInSub = (subId: string) =>
+    state.dataProducts.filter((p) => p.subDomainId === subId && !p.archivedAt);
+  const archivedInSub = (subId: string) =>
+    state.dataProducts.filter((p) => p.subDomainId === subId && !!p.archivedAt);
   const selSub = state.subDomains.find((s) => s.id === selectedSub) || null;
 
   return (
@@ -54,7 +60,7 @@ export function Registry({
               Domain tree
             </div>
             <div className="domain-tree">
-              {renderTree({ state, openStreams, setOpenStreams, openDomains, setOpenDomains, selectedSub, setSelectedSub, productsInSub })}
+              {renderTree({ store, canAdmin, state, openStreams, setOpenStreams, openDomains, setOpenDomains, selectedSub, setSelectedSub, productsInSub })}
             </div>
             <button className="btn btn--primary btn--block" style={{ marginTop: "14px" }} onClick={() => setRegisterOpen(true)}>
               + Register domain / product
@@ -66,16 +72,47 @@ export function Registry({
               <div className="eyebrow eyebrow--teal">
                 {selSub ? `${pathLabel(state, selSub)} — ${productsInSub(selSub.id).length} data products` : "Select a sub-domain"}
               </div>
+              {selSub && canAdmin && archivedInSub(selSub.id).length > 0 ? (
+                <span
+                  className="rigour-gate__sub"
+                  style={{ cursor: "pointer", color: "var(--label)" }}
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  {showArchived ? "Hide archived" : `Show archived (${archivedInSub(selSub.id).length})`}
+                </span>
+              ) : null}
             </div>
             {selSub ? (
               productsInSub(selSub.id).map((p) => (
-                <ProductCard key={p.id} store={store} product={p} onOpen={() => onOpenProduct(p.id)} />
+                <ProductCard
+                  key={p.id}
+                  store={store}
+                  product={p}
+                  canAdmin={canAdmin}
+                  onOpen={() => onOpenProduct(p.id)}
+                />
               ))
             ) : (
               <div className="rigour-gate__sub">Pick a leaf in the tree to see its products.</div>
             )}
             {selSub && productsInSub(selSub.id).length === 0 ? (
               <div className="rigour-gate__sub">No products here yet — register one.</div>
+            ) : null}
+            {selSub && canAdmin && showArchived && archivedInSub(selSub.id).length > 0 ? (
+              <>
+                <div className="eyebrow eyebrow--muted" style={{ margin: "16px 0 8px" }}>
+                  Archived
+                </div>
+                {archivedInSub(selSub.id).map((p) => (
+                  <ProductCard
+                    key={p.id}
+                    store={store}
+                    product={p}
+                    canAdmin={canAdmin}
+                    onOpen={() => onOpenProduct(p.id)}
+                  />
+                ))}
+              </>
             ) : null}
           </div>
         </div>
@@ -97,17 +134,39 @@ export function Registry({
   );
 }
 
-function ProductCard({ store, product, onOpen }: { store: Store; product: DataProduct; onOpen: () => void }) {
+function ProductCard({
+  store,
+  product,
+  canAdmin,
+  onOpen,
+}: {
+  store: Store;
+  product: DataProduct;
+  canAdmin: boolean;
+  onOpen: () => void;
+}) {
   const owner = product.ownerId ? store.resolveUser(product.ownerId) : null;
   const brd = store.docOf(product.id, DocType.BRD);
   const blocked = brd && brd.status === DocStatus.IN_RIGOUR && store.checksForDoc(brd.id).some((c) => c.score === Score.RED);
-  const accent = blocked ? "var(--r)" : "var(--t)";
+  const archived = !!product.archivedAt;
+  const accent = archived ? "var(--locked)" : blocked ? "var(--r)" : "var(--t)";
   const chip = chipFor(store, product);
+
+  const onArchive = (e: MouseEvent) => {
+    e.stopPropagation();
+    if (archived) {
+      store.dispatch({ type: "UNARCHIVE_PRODUCT", productId: product.id });
+    } else {
+      if (window.confirm(`Archive "${product.name}"? It is hidden from the registry but its signatures and history are kept. You can restore it later.`)) {
+        store.dispatch({ type: "ARCHIVE_PRODUCT", productId: product.id });
+      }
+    }
+  };
 
   return (
     <div
       className="card card--list card--accent-left product-card"
-      style={{ ["--accent" as any]: accent, cursor: "pointer" }}
+      style={{ ["--accent" as any]: accent, cursor: "pointer", opacity: archived ? 0.6 : 1 }}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -120,7 +179,19 @@ function ProductCard({ store, product, onOpen }: { store: Store; product: DataPr
           <div className="product-card__meta">{`${product.code} · Owner: ${owner ? owner.name : "—"}`}</div>
           <div className="product-card__title">{product.name}</div>
         </div>
-        <span className={"chip chip--" + chip.cls}>{chip.label}</span>
+        <div className="row gap-3" style={{ alignItems: "center" }}>
+          <span className={"chip chip--" + chip.cls}>{chip.label}</span>
+          {canAdmin ? (
+            <button
+              className="btn btn--ghost"
+              style={{ padding: "4px 10px", fontSize: ".68rem" }}
+              onClick={onArchive}
+              title={archived ? "Restore to the registry" : "Archive (hide from the registry; history kept)"}
+            >
+              {archived ? "Unarchive" : "Archive"}
+            </button>
+          ) : null}
+        </div>
       </div>
       <Pipeline product={product} docFor={(t) => store.docOf(product.id, t)} />
     </div>
@@ -140,6 +211,8 @@ function chipFor(store: Store, product: DataProduct): { cls: string; label: stri
 
 // ── tree rendering ──
 function renderTree({
+  store,
+  canAdmin,
   state,
   openStreams,
   setOpenStreams,
@@ -149,6 +222,8 @@ function renderTree({
   setSelectedSub,
   productsInSub,
 }: {
+  store: Store;
+  canAdmin: boolean;
   state: StoreGraph;
   openStreams: Set<string>;
   setOpenStreams: (s: Set<string>) => void;
@@ -164,6 +239,25 @@ function renderTree({
     else n.add(id);
     setter(n);
   };
+  // Inline rename affordance (PO only). A small pencil that prompts and dispatches the
+  // matching RENAME intent. Rename is display-only — it never changes the tree shape,
+  // the placement rigour check, or the seeded node count (DATA-MODEL §6-C amendment).
+  const renameBtn = (currentName: string, onName: (name: string) => void) =>
+    canAdmin ? (
+      <span
+        className="count"
+        title="Rename"
+        style={{ marginLeft: "6px", cursor: "pointer", color: "var(--label)" }}
+        onClick={(e) => {
+          e.stopPropagation();
+          const next = window.prompt("Rename to:", currentName);
+          if (next != null && next.trim() && next.trim() !== currentName) onName(next.trim());
+        }}
+      >
+        ✎
+      </span>
+    ) : null;
+
   const rows: ReactNode[] = [];
   for (const stream of [...state.streams].sort(byOrder)) {
     const sOpen = openStreams.has(stream.id);
@@ -176,6 +270,7 @@ function renderTree({
       >
         <span className="tree-caret">{sOpen ? "▾" : "▸"}</span>
         {stream.name}
+        {renameBtn(stream.name, (name) => store.dispatch({ type: "RENAME_STREAM", streamId: stream.id, name }))}
       </div>,
     );
     if (!sOpen) continue;
@@ -191,6 +286,7 @@ function renderTree({
         >
           <span className="tree-caret">{subs.length ? (dOpen ? "▾" : "▸") : "·"}</span>
           {dom.name}
+          {renameBtn(dom.name, (name) => store.dispatch({ type: "RENAME_DOMAIN", domainId: dom.id, name }))}
         </div>,
       );
       if (!dOpen) continue;
@@ -203,6 +299,7 @@ function renderTree({
             onClick={() => setSelectedSub(sub.id)}
           >
             {sub.name} · <span className="count">{`${count} product${count === 1 ? "" : "s"}`}</span>
+            {renameBtn(sub.name, (name) => store.dispatch({ type: "RENAME_SUBDOMAIN", subDomainId: sub.id, name }))}
           </div>,
         );
       }

@@ -16,7 +16,7 @@
 
 import { ulid } from "./ids";
 import { buildSeed } from "./seed";
-import { DocType, DocStatus, LifecycleStage } from "./enums";
+import { DocType, DocStatus, LifecycleStage, Role } from "./enums";
 import type { ScoreValue } from "./enums";
 import * as lc from "./lifecycle";
 import { signAndMaybeUnlock } from "./lifecycle";
@@ -42,13 +42,19 @@ import type {
 } from "../types";
 import type { RoleValue } from "./enums";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 // ── intents (the only mutation surface) ────────────────────────────────────────
 export type Intent =
   | { type: "SET_ACTING_USER"; userId: string }
   | { type: "REGISTER_PRODUCT"; code: string; subDomainId: string; name: string; oneLiner: string; ownerId?: string | null }
   | { type: "CREATE_SUBDOMAIN"; domainId: string; name: string }
+  // ── registry admin (PO-only): archive products, rename tree nodes ──
+  | { type: "ARCHIVE_PRODUCT"; productId: string }
+  | { type: "UNARCHIVE_PRODUCT"; productId: string }
+  | { type: "RENAME_STREAM"; streamId: string; name: string }
+  | { type: "RENAME_DOMAIN"; domainId: string; name: string }
+  | { type: "RENAME_SUBDOMAIN"; subDomainId: string; name: string }
   | { type: "CREATE_BRD"; productId: string }
   | { type: "CREATE_FSD"; productId: string }
   | { type: "CREATE_QRG"; productId: string }
@@ -84,6 +90,9 @@ export interface Store {
   actingUser: () => User | null;
   resolveUser: (uid: string) => User | null;
   product: (pid: string) => DataProduct | null;
+  activeProducts: () => DataProduct[];
+  archivedProducts: () => DataProduct[];
+  isPO: () => boolean;
   docsForProduct: (pid: string) => DuidelikDocument[];
   docOf: (pid: string, type: string) => DuidelikDocument | null;
   checksForDoc: (did: string) => RigourCheck[];
@@ -143,6 +152,11 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     // v1 → v2: add the per-place role roster (empty; populated as people redeem).
     if (next.schemaVersion < 2) {
       next = { ...next, members: next.members ?? [], schemaVersion: 2 };
+    }
+    // v2 → v3: products gain an optional archivedAt. No backfill needed — an absent
+    // field reads as active. Bump the version so the shape is recorded.
+    if (next.schemaVersion < 3) {
+      next = { ...next, schemaVersion: 3 };
     }
     if (next.schemaVersion !== SCHEMA_VERSION) {
       next = { ...next, schemaVersion: SCHEMA_VERSION };
@@ -212,6 +226,9 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
   const docsForProduct = (pid: string) => state.documents.filter((d) => d.dataProductId === pid);
   const docOf = (pid: string, type: string) => docsForProduct(pid).find((d) => d.type === type) || null;
   const product = (pid: string) => state.dataProducts.find((p) => p.id === pid) || null;
+  const activeProducts = () => state.dataProducts.filter((p) => !p.archivedAt);
+  const archivedProducts = () => state.dataProducts.filter((p) => !!p.archivedAt);
+  const isPO = () => signingActor()?.role === Role.PRODUCT_OWNER;
   const checksForDoc = (did: string) => state.rigourChecks.filter((c) => c.documentId === did);
 
   // Is the Stream→Domain→SubDomain chain intact for a product? (brd.domain_placement)
@@ -264,6 +281,74 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
         const sd = { id: genId(), domainId: intent.domainId, name: intent.name, order: 99 };
         commit({ ...state, subDomains: [...state.subDomains, sd] });
         return { ok: true, subDomain: sd };
+      }
+
+      case "ARCHIVE_PRODUCT": {
+        const gate = requirePO();
+        if (gate) return gate;
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        if (p.archivedAt) return { ok: true, product: p }; // idempotent
+        const updated: DataProduct = {
+          ...p,
+          archivedAt: now.toISOString(),
+          archivedById: currentPersonId(),
+          updatedAt: now.toISOString(),
+        };
+        commit({ ...state, dataProducts: upsert(state.dataProducts, updated) });
+        return { ok: true, product: updated };
+      }
+
+      case "UNARCHIVE_PRODUCT": {
+        const gate = requirePO();
+        if (gate) return gate;
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        if (!p.archivedAt) return { ok: true, product: p }; // idempotent
+        const updated: DataProduct = {
+          ...p,
+          archivedAt: null,
+          archivedById: null,
+          updatedAt: now.toISOString(),
+        };
+        commit({ ...state, dataProducts: upsert(state.dataProducts, updated) });
+        return { ok: true, product: updated };
+      }
+
+      case "RENAME_STREAM": {
+        const gate = requirePO();
+        if (gate) return gate;
+        const name = (intent.name ?? "").trim();
+        if (!name) return { ok: false, code: "EMPTY", message: "Name must be non-empty." };
+        const s = state.streams.find((x) => x.id === intent.streamId);
+        if (!s) return { ok: false, code: "NOT_FOUND", message: "Stream not found." };
+        const updated = { ...s, name };
+        commit({ ...state, streams: state.streams.map((x) => (x.id === s.id ? updated : x)) });
+        return { ok: true, stream: updated };
+      }
+
+      case "RENAME_DOMAIN": {
+        const gate = requirePO();
+        if (gate) return gate;
+        const name = (intent.name ?? "").trim();
+        if (!name) return { ok: false, code: "EMPTY", message: "Name must be non-empty." };
+        const d = state.domains.find((x) => x.id === intent.domainId);
+        if (!d) return { ok: false, code: "NOT_FOUND", message: "Domain not found." };
+        const updated = { ...d, name };
+        commit({ ...state, domains: state.domains.map((x) => (x.id === d.id ? updated : x)) });
+        return { ok: true, domain: updated };
+      }
+
+      case "RENAME_SUBDOMAIN": {
+        const gate = requirePO();
+        if (gate) return gate;
+        const name = (intent.name ?? "").trim();
+        if (!name) return { ok: false, code: "EMPTY", message: "Name must be non-empty." };
+        const sd = state.subDomains.find((x) => x.id === intent.subDomainId);
+        if (!sd) return { ok: false, code: "NOT_FOUND", message: "Sub-domain not found." };
+        const updated = { ...sd, name };
+        commit({ ...state, subDomains: state.subDomains.map((x) => (x.id === sd.id ? updated : x)) });
+        return { ok: true, subDomain: updated };
       }
 
       case "CREATE_BRD":
@@ -450,6 +535,28 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     return actingUserId;
   }
 
+  // Registry-admin gate: archiving a product and renaming tree nodes are PRODUCT_OWNER
+  // actions. Reads the acting role the SAME way the sign gate does (signingActor →
+  // roster in house mode, picker in standalone), so authorization is one source of
+  // truth. Returns an ERR_ROLE DispatchResult when the actor is not a PO, else null
+  // (meaning "allowed").
+  function requirePO(): DispatchResult | null {
+    const actor = signingActor();
+    if (!actor) {
+      return {
+        ok: false,
+        code: "ERR_ROLE",
+        message: houseMode
+          ? "You are not a member of this place's registry."
+          : "No acting user.",
+      };
+    }
+    if (actor.role !== Role.PRODUCT_OWNER) {
+      return { ok: false, code: "ERR_ROLE", message: "Only a Product Owner can change the registry." };
+    }
+    return null;
+  }
+
   // ── doc helpers ──
   function findDoc(did: string): DuidelikDocument {
     const d = state.documents.find((x) => x.id === did);
@@ -485,6 +592,9 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     actingUser,
     resolveUser,
     product,
+    activeProducts,
+    archivedProducts,
+    isPO,
     docsForProduct,
     docOf,
     checksForDoc,

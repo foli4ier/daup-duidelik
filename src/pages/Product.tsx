@@ -35,6 +35,11 @@ export function ProductScreen({
   const [tab, setTab] = useState<DocTypeValue | "GLOSSARY">(DocType.BRD);
   const [banner, setBanner] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  // Runtime AI reachability. Starts optimistic (a transport is wired) and flips false
+  // the first time a draft call fails — e.g. the P5 /ai/* route isn't built in local
+  // dev, so the fetch 404s. The AI bar then shows its offline state instead of a dead
+  // Draft button (DESIGN-SYSTEM §6.10 / STACK §4 graceful degradation).
+  const [aiReachable, setAiReachable] = useState(true);
 
   if (!product)
     return (
@@ -108,6 +113,8 @@ export function ProductScreen({
               aiClient={aiClient}
               aiBusy={aiBusy}
               setAiBusy={setAiBusy}
+              aiReachable={aiReachable}
+              setAiReachable={setAiReachable}
               dispatch={dispatch}
             />
           )}
@@ -129,6 +136,8 @@ function DocTab({
   aiClient,
   aiBusy,
   setAiBusy,
+  aiReachable,
+  setAiReachable,
   dispatch,
 }: {
   store: Store;
@@ -142,6 +151,8 @@ function DocTab({
   aiClient: AiClient | null;
   aiBusy: boolean;
   setAiBusy: (b: boolean) => void;
+  aiReachable: boolean;
+  setAiReachable: (b: boolean) => void;
   dispatch: DispatchFn;
 }) {
   const doc = docFor(docType);
@@ -159,13 +170,17 @@ function DocTab({
   const patch = (nextContent: DocContent) => dispatch({ type: "EDIT_DOCUMENT", documentId: doc.id, content: nextContent });
 
   async function draft() {
-    if (!aiClient || !aiClient.isAvailable()) return;
+    if (!aiClient || !aiClient.isAvailable() || !aiReachable) return;
     setAiBusy(true);
     try {
       const content = await aiClient.draft(docType, product, { current: doc!.content });
       await dispatch({ type: "EDIT_DOCUMENT", documentId: doc!.id, content });
     } catch {
-      /* degrade silently; bar shows offline next render if transport died */
+      // The transport is wired but the call failed (route down / unreachable / timeout).
+      // Flip reachability so the AI bar renders its offline state and the Draft button
+      // stops being a dead click (DESIGN-SYSTEM §6.10). The app is never blocked on AI:
+      // the human edits by hand and rigour runs deterministically (STACK §4).
+      setAiReachable(false);
     } finally {
       setAiBusy(false);
     }
@@ -197,7 +212,7 @@ function DocTab({
           />
         ))}
       </div>
-      <AiBar aiClient={aiClient} docType={docType} status={doc.status} busy={aiBusy} onDraft={() => draft()} />
+      <AiBar aiClient={aiClient} docType={docType} status={doc.status} busy={aiBusy} online={aiReachable} onDraft={() => draft()} />
     </div>
   );
 

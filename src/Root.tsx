@@ -10,11 +10,12 @@
 // The session is held in memory + sessionStorage (per-tab) so a reload inside the tab
 // keeps it until the short-lived bearer expires. duidelik never mints a session.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import { createStore } from "./core/store";
 import { createAiClient } from "./core/aiClient";
 import type { AiTransport } from "./core/aiClient";
+import { fetchRemoteGraph, pushRemoteGraph } from "./api/remoteStore";
 import { App } from "./App";
 import { HubRedeem } from "./hub/HubRedeem";
 import { SessionProvider, STANDALONE_SESSION } from "./context/SessionContext";
@@ -78,6 +79,48 @@ export function Root() {
     return createStore({ aiClient });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [house?.placeId, house?.peerId, house?.phone, aiClient]);
+
+  // ── Durable persistence (STACK §5): in HOUSE mode the seed node is the source of
+  //    truth. On mount, pull the place's stored registry and adopt it if present
+  //    (server wins over the local cache). Then write-through every committed change
+  //    to the seed (debounced). localStorage stays the local cache / offline buffer.
+  //    Fails SOFT: a seed hiccup degrades to local-only, never breaks the app.
+  const hydratedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!house) return;
+    const { placeId, bearer, seedOrigin } = house;
+    let cancelled = false;
+    let pushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    (async () => {
+      const r = await fetchRemoteGraph({ seedOrigin, placeId, bearer });
+      if (cancelled) return;
+      if (r.ok && r.graph) {
+        try {
+          store.importJson(r.graph); // server wins; store migrates on import
+        } catch {
+          /* stored graph unreadable — keep local, the next push repairs it */
+        }
+      }
+      // Mark hydrated so the write-through below does not immediately echo the pull.
+      hydratedRef.current = placeId;
+    })();
+
+    const unsub = store.subscribe(() => {
+      if (hydratedRef.current !== placeId) return; // ignore pre-hydrate churn
+      if (pushTimer) clearTimeout(pushTimer);
+      pushTimer = setTimeout(() => {
+        void pushRemoteGraph({ seedOrigin, placeId, bearer, graph: store.getState() });
+      }, 400);
+    });
+
+    return () => {
+      cancelled = true;
+      if (pushTimer) clearTimeout(pushTimer);
+      unsub();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [house?.placeId, house?.bearer, house?.seedOrigin, store]);
 
   // Expose the store for the headless tour hook (parity with the v1 build). The opener
   // itself is registered by App via window.__duidelikSetOpener; we only re-point the
