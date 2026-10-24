@@ -10,7 +10,7 @@ import { DocSection } from "../components/fields";
 import { RigourGate, SignaturePanel, SignatureRecord, AiBar } from "../components/panels";
 import { LifecycleRail } from "../components/LifecycleRail";
 import type { Store, Intent, DispatchResult } from "../core/store";
-import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent } from "../types";
+import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck } from "../types";
 import type { AiClient } from "../core/aiClient";
 
 const TABS: (DocTypeValue | "GLOSSARY")[] = [DocType.BRD, DocType.FSD, DocType.QRG, "GLOSSARY"];
@@ -198,7 +198,16 @@ function DocTab({
     <div className="doc-shell">
       <div className="doc-shell__head">
         <div className="eyebrow eyebrow--teal">{`${docTypeTitle(docType)} · ${doc.status}`}</div>
-        <div className="doc-shell__head-meta">{signature ? <span className="hl">signed</span> : "editable"}</div>
+        <div className="row gap-3" style={{ alignItems: "center" }}>
+          <button
+            className="btn btn--ghost"
+            title={`Print this ${docType}`}
+            onClick={() => printDocument({ docType, doc, product, placementPath, signature, resolveUser, checks })}
+          >
+            🖨 Print
+          </button>
+          <div className="doc-shell__head-meta">{signature ? <span className="hl">signed</span> : "editable"}</div>
+        </div>
       </div>
       <div className="doc-shell__body">
         {sections.map((s) => (
@@ -388,6 +397,117 @@ function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGr
       </div>
     </div>
   );
+}
+
+// ── print ──
+// Opens a clean, self-contained print window for a BRD/FSD/QRG. Renders the document
+// from the same section schema the editor uses (so all three doc types print
+// uniformly), plus placement, status, rigour tally and signature. Pure read — never
+// mutates the store. Escapes all values (no HTML injection from content).
+// Ported from app/ui/Product.js; JS→TS typing, matched to the current docSchemas kinds.
+function printDocument({
+  docType,
+  doc,
+  product,
+  placementPath,
+  signature,
+  resolveUser,
+  checks,
+}: {
+  docType: DocTypeValue;
+  doc: DuidelikDocument;
+  product: DataProduct;
+  placementPath: string;
+  signature: Signature | null;
+  resolveUser: (id: string) => any;
+  checks: RigourCheck[];
+}) {
+  const esc = (s: unknown): string =>
+    String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+  const title = docTypeTitle(docType);
+  const content = (doc.content || {}) as Record<string, unknown>;
+
+  const renderObj = (o: Record<string, unknown>): string =>
+    Object.entries(o)
+      .filter(([, val]) => val != null && val !== "")
+      .map(([k, val]) => "<b>" + esc(k) + ":</b> " + (Array.isArray(val) || typeof val === "object" ? renderVal(val) : esc(val)))
+      .join(" &nbsp; ");
+  const renderVal = (v: unknown): string => {
+    if (v == null || v === "") return '<span class="muted">—</span>';
+    if (Array.isArray(v)) {
+      if (!v.length) return '<span class="muted">—</span>';
+      return "<ul>" + v.map((it) => "<li>" + (it && typeof it === "object" ? renderObj(it as Record<string, unknown>) : esc(it)) + "</li>").join("") + "</ul>";
+    }
+    if (typeof v === "object") return renderObj(v as Record<string, unknown>);
+    return esc(v);
+  };
+
+  const sections = sectionsFor(docType)
+    .map((sec) => {
+      const rows = sec.fields
+        .map((f) => {
+          let v: unknown;
+          if (f.kind === "readonly-oneliner") v = product.oneLiner;
+          else if (f.kind === "readonly-breadcrumb") v = placementPath;
+          else v = content[f.key];
+          return `<div class="field"><div class="flabel">${esc(f.label)}</div><div class="fval">${renderVal(v)}</div></div>`;
+        })
+        .join("");
+      return `<section><h2>${esc(sec.label)}</h2>${rows}</section>`;
+    })
+    .join("");
+
+  const owner = product.ownerId ? resolveUser(product.ownerId) : null;
+  const tally =
+    checks && checks.length
+      ? (() => {
+          const g = checks.filter((c) => c.score === "GREEN").length;
+          const a = checks.filter((c) => c.score === "AMBER").length;
+          const r = checks.filter((c) => c.score === "RED").length;
+          return `${g} pass · ${a} amber · ${r} red`;
+        })()
+      : "not yet scored";
+  const sigLine = signature
+    ? `Signed by ${esc(resolveUser(signature.signedById)?.name || signature.signedById)} (${esc(signature.signedByRole)}) on ${esc(
+        new Date(signature.signedAt).toLocaleString(),
+      )} · checklist ${esc(signature.checklistVersion)}`
+    : `Status: ${esc(doc.status)} · not signed`;
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(product.code)} — ${esc(title)}</title>
+<style>
+  @media print { @page { margin: 18mm; } .noprint { display:none; } }
+  body { font-family: Inter, "Segoe UI", Arial, sans-serif; color:#111; max-width: 820px; margin: 24px auto; padding: 0 16px; line-height: 1.5; }
+  .strip { height:6px; background: linear-gradient(90deg,#e30613 0 46%,#fff 46% 49%,#008b83 49%); border-radius:3px; margin-bottom:16px; }
+  .crumb { font-size:.72rem; letter-spacing:.06em; color:#667; text-transform:uppercase; }
+  h1 { font-size:1.5rem; margin:4px 0 2px; }
+  .meta { font-size:.8rem; color:#445; margin-bottom:4px; }
+  .sig { font-size:.8rem; color:#036; background:#f0f7f6; border:1px solid #cde; border-radius:6px; padding:8px 10px; margin:10px 0 18px; }
+  h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:#008b83; border-bottom:1px solid #e3e7ea; padding-bottom:3px; margin:18px 0 8px; }
+  .field { margin:6px 0; }
+  .flabel { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:#889; }
+  .fval { font-size:.9rem; }
+  .muted { color:#aab; } ul { margin:4px 0 4px 18px; padding:0; } li { margin:2px 0; }
+  .btn { font:inherit; padding:8px 16px; border:1px solid #008b83; background:#008b83; color:#fff; border-radius:6px; cursor:pointer; }
+  .foot { margin-top:24px; font-size:.68rem; color:#99a; border-top:1px solid #eee; padding-top:8px; }
+</style></head><body>
+  <div class="strip"></div>
+  <div class="crumb">${esc(placementPath)}</div>
+  <h1>${esc(title)}</h1>
+  <div class="meta">${esc(product.code)} — ${esc(product.name)} · Owner: ${esc(owner ? owner.name : "—")}</div>
+  <div class="sig">${sigLine} · Rigour: ${tally}</div>
+  ${sections}
+  <div class="foot">Printed from duidelik · ${esc(new Date().toLocaleString())}</div>
+  <p class="noprint" style="margin-top:20px"><button class="btn" onclick="window.print()">Print / Save as PDF</button></p>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) {
+    alert("Pop-up blocked — allow pop-ups to print.");
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── helpers ──
