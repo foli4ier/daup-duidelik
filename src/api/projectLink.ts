@@ -1,15 +1,24 @@
 // daup-duidelik — Open-in-Project link builder (A-i, scope doc
 // docs/SCOPE-roadmap-daup-projects-and-plan.md).
 //
-// A Roadmap tile may carry a daupProjectRef pointing at the daup `project` app
-// (project.daup.co.za, module daup-project). This module turns that ref + the current
-// place context into a Hub-style OPEN URL, so clicking "Open in Project ↗" full-
-// navigates to Project, which runs its OWN door. duidelik reads/writes NOTHING from
-// Project and never mints a credential — it is a pure deep-link out.
+// A Roadmap tile may carry a daupProjectRef pointing at the daup `project` app.
+// This module turns that ref + the current place context into a Hub-style OPEN URL, so
+// clicking "Open in Project ↗" full-navigates to Project, which runs its OWN door.
+// duidelik reads/writes NOTHING from Project and never mints a credential — it is a
+// pure deep-link out.
+//
+// HOST (PO ruling 2026-10-26, D1 parallel / D2 plural — CONCEPT §9, HANDOFF §5.1):
+// the KiroCrew-native Project app is deployed on the PLURAL host
+// `projects.daup.co.za` (module `daup-projects`), running parallel to the legacy
+// `project.daup.co.za` (another engine's app). duidelik must build links at the
+// plural host, and must RECOGNISE a ref on EITHER host during the parallel run so a
+// pasted plan URL is opened directly, not downgraded to a placeIdHint. The platform
+// mirror (daup-frontend-edge PROJECT_HOME / projectUrls.ts) carries the same repoint —
+// that is a platform-architect change, not duidelik's (flagged in the hand-off spec).
 //
 // Handshake contract (mirrored from daup-frontend-edge src/hub/projectUrls.ts +
 // ownerArrival.ts — NOT imported; _daup-reference must never be copied into the repo):
-//   • Project opens at `https://project.daup.co.za/d/hub` with NON-authoritative hints.
+//   • Project opens at `https://projects.daup.co.za/d/hub` with NON-authoritative hints.
 //   • Hint query keys: emailHint, houseHint, placeIdHint (one per place id).
 //   • duidelik does NOT hold or mint a houseRedeem (that needs a place-session bearer +
 //     the seed's /house/session/redeem/issue — the Hub's job, not the SSO receiving
@@ -18,8 +27,13 @@
 //     cross-app credential leak.
 //   • Credential-shaped keys (token/email/places/role/…) are NEVER written.
 
-export const PROJECT_HOME = "https://project.daup.co.za";
-const PROJECT_HOST = "project.daup.co.za";
+export const PROJECT_HOME = "https://projects.daup.co.za";
+const PROJECT_HOST = "projects.daup.co.za";
+// Legacy singular host (another engine's app), still honoured as a recognised ref
+// during the parallel run so an already-pasted link is opened directly, then
+// normalised onto PROJECT_HOST so the click lands on the live app, not the old one.
+const LEGACY_PROJECT_HOST = "project.daup.co.za";
+const KNOWN_PROJECT_HOSTS = new Set([PROJECT_HOST, LEGACY_PROJECT_HOST]);
 const HUB_PATH = "/d/hub";
 
 // Hint query keys (verbatim from the platform handoff contract).
@@ -48,11 +62,14 @@ function stripCredentialQuery(url: URL): void {
   }
 }
 
-/** True when ref already looks like a project.daup.co.za URL we can open directly. */
+/** True when ref already looks like a Project URL we can open directly. Accepts BOTH
+ *  the plural host (projects.daup.co.za) and the legacy singular host
+ *  (project.daup.co.za) during the parallel run, so a pasted plan URL on either is
+ *  opened directly rather than downgraded to a placeIdHint. */
 export function isProjectUrl(ref: string): boolean {
   try {
     const u = new URL(ref.trim());
-    return u.hostname === PROJECT_HOST;
+    return KNOWN_PROJECT_HOSTS.has(u.hostname);
   } catch {
     return false;
   }
@@ -61,8 +78,9 @@ export function isProjectUrl(ref: string): boolean {
 /**
  * Build the Open-in-Project URL for a tile, or null when the tile has no usable ref.
  *
- *  • A full project.daup.co.za URL in daupProjectRef → used as-is (credential query
- *    stripped for safety), so a human can paste a deep link to a specific project.
+ *  • A full Project URL in daupProjectRef (plural OR legacy host) → opened directly
+ *    (credential query stripped; a legacy-host link normalised onto the plural host so
+ *    the click reaches the live app), so a human can paste a deep link to a project.
  *  • Any other non-empty ref → treated as an opaque handle appended as a placeIdHint
  *    on the /d/hub door (alongside the current placeId), so Project opens in context.
  *  • Empty/null ref → null (no link; the caller shows nothing / a disabled affordance).
@@ -71,11 +89,13 @@ export function buildOpenInProjectUrl(ctx: ProjectLinkContext): string | null {
   const ref = (ctx.daupProjectRef || "").trim();
   if (!ref) return null;
 
-  // Case 1: an explicit project.daup.co.za URL — open it directly (strip any credential
-  // query a pasted link might carry).
+  // Case 1: an explicit Project URL (plural or legacy host) — open it directly. Strip
+  // any credential query a pasted link might carry, and normalise a legacy-host link
+  // onto the plural host so the click lands on the live app, not the retired one.
   if (isProjectUrl(ref)) {
     try {
       const u = new URL(ref);
+      if (u.hostname === LEGACY_PROJECT_HOST) u.hostname = PROJECT_HOST;
       stripCredentialQuery(u);
       return u.toString();
     } catch {

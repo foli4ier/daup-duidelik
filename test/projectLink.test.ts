@@ -1,8 +1,9 @@
 // daup-duidelik — Open-in-Project link builder (A-i). Pure URL contract test.
 //
 // Proves the deep-link handshake mirrored from the platform contract:
-//   • a full project.daup.co.za URL is used as-is (credential query stripped);
-//   • a bare handle opens project.daup.co.za/d/hub with placeIdHint(s);
+//   • a full Project URL (plural OR legacy host) is opened directly, a legacy-host
+//     link normalised onto the plural host, credential query stripped;
+//   • a bare handle opens projects.daup.co.za/d/hub with placeIdHint(s);
 //   • the current placeId rides as a hint alongside the ref;
 //   • credential-shaped query keys are NEVER emitted;
 //   • no ref → null (no button).
@@ -20,6 +21,7 @@ describe("projectLink — buildOpenInProjectUrl", () => {
     const url = buildOpenInProjectUrl({ daupProjectRef: "proj-123", placeId: "place-abc" })!;
     const u = new URL(url);
     expect(u.origin + u.pathname).toBe(`${PROJECT_HOME}/d/hub`);
+    expect(u.hostname).toBe("projects.daup.co.za"); // plural host after the repoint
     const hints = u.searchParams.getAll("placeIdHint");
     expect(hints).toContain("place-abc"); // current place context
     expect(hints).toContain("proj-123"); // the tile's ref
@@ -38,14 +40,26 @@ describe("projectLink — buildOpenInProjectUrl", () => {
     expect(u.searchParams.getAll("placeIdHint")).toEqual(["proj-9"]); // no placeId → only the ref
   });
 
-  it("uses a full project.daup.co.za URL as-is", () => {
+  it("uses a full plural-host plan URL verbatim (the user's case)", () => {
+    const ref = "https://projects.daup.co.za/p/demo-daup-11386-s4";
+    const url = buildOpenInProjectUrl({ daupProjectRef: ref, placeId: "place-x" })!;
+    expect(url).toBe(ref); // direct open — no /d/hub, no placeIdHint mangling
+    const u = new URL(url);
+    expect(u.pathname).toBe("/p/demo-daup-11386-s4");
+    expect(u.searchParams.has("placeIdHint")).toBe(false);
+  });
+
+  it("normalises a legacy-host plan URL onto the plural host (opens the live app)", () => {
     const ref = "https://project.daup.co.za/p/analytics-transformation";
     const url = buildOpenInProjectUrl({ daupProjectRef: ref, placeId: "place-x" })!;
-    expect(url).toBe(ref);
+    const u = new URL(url);
+    expect(u.hostname).toBe("projects.daup.co.za"); // repointed from the legacy host
+    expect(u.pathname).toBe("/p/analytics-transformation"); // path preserved
+    expect(u.searchParams.has("placeIdHint")).toBe(false); // still a direct open, not a hint
   });
 
   it("strips a credential-shaped query from a pasted project URL", () => {
-    const ref = "https://project.daup.co.za/p/x?token=abc&role=PRODUCT_OWNER&foo=keep";
+    const ref = "https://projects.daup.co.za/p/x?token=abc&role=PRODUCT_OWNER&foo=keep";
     const url = buildOpenInProjectUrl({ daupProjectRef: ref, placeId: null })!;
     const u = new URL(url);
     expect(u.searchParams.has("token")).toBe(false);
@@ -61,9 +75,10 @@ describe("projectLink — buildOpenInProjectUrl", () => {
     }
   });
 
-  it("isProjectUrl recognises only the project host", () => {
-    expect(isProjectUrl("https://project.daup.co.za/anything")).toBe(true);
-    expect(isProjectUrl("https://evil.example.com/project.daup.co.za")).toBe(false);
+  it("isProjectUrl recognises BOTH the plural and legacy Project hosts", () => {
+    expect(isProjectUrl("https://projects.daup.co.za/p/x")).toBe(true); // plural (new)
+    expect(isProjectUrl("https://project.daup.co.za/p/x")).toBe(true); // legacy (parallel run)
+    expect(isProjectUrl("https://evil.example.com/projects.daup.co.za")).toBe(false);
     expect(isProjectUrl("not a url")).toBe(false);
   });
 });
