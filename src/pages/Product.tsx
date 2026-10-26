@@ -9,6 +9,18 @@ import { sectionsFor } from "../components/docSchemas";
 import { DocSection } from "../components/fields";
 import { RigourGate, SignaturePanel, SignatureRecord, AiBar } from "../components/panels";
 import { LifecycleRail } from "../components/LifecycleRail";
+import {
+  buildDocumentArtifact,
+  buildGlossaryArtifact,
+  artifactJson,
+  artifactFilename,
+  parseArtifact,
+  productMismatchReason,
+  isDocumentArtifact,
+  docTypeOf,
+  ArtifactError,
+} from "../core/artifact";
+import { downloadTextFile, pickTextFile } from "../api/fileIo";
 import type { Store, Intent, DispatchResult } from "../core/store";
 import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck } from "../types";
 import type { AiClient } from "../core/aiClient";
@@ -155,8 +167,74 @@ function DocTab({
   setAiReachable: (b: boolean) => void;
   dispatch: DispatchFn;
 }) {
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const isOwner = store.isPO();
   const doc = docFor(docType);
-  if (!doc) return <CreateDocPanel product={product} docType={docType} docFor={docFor} dispatch={dispatch} />;
+
+  // Import a document artifact for this product/doc-type. Shared by the doc-shell
+  // header and the create panel (import-to-create). Validates kind + product match,
+  // confirms a signed overwrite, then routes through IMPORT_DOCUMENT (→ EDIT_DOCUMENT,
+  // so a signed target re-opens to DRAFT — never a forged signature).
+  async function importDocumentFlow(existing: DuidelikDocument | null) {
+    let text: string | null;
+    try {
+      text = await pickTextFile();
+    } catch {
+      setImportMsg("Could not read the selected file.");
+      return;
+    }
+    if (text == null) return; // cancelled
+    let art;
+    try {
+      art = parseArtifact(text);
+    } catch (e) {
+      setImportMsg(e instanceof ArtifactError ? e.message : "This file is not a valid duidelik artifact.");
+      return;
+    }
+    if (!isDocumentArtifact(art)) {
+      setImportMsg(`That file is a ${art.kind} artifact — open the Glossary tab to import it.`);
+      return;
+    }
+    if (art.kind !== docType) {
+      setImportMsg(`That file is a ${art.kind}; you are on the ${docType} tab. Open the ${art.kind} tab to import it.`);
+      return;
+    }
+    const mismatch = productMismatchReason(art, product);
+    if (mismatch && !window.confirm(mismatch + "\n\nImport anyway?")) return;
+    if (existing && existing.status === DocStatus.SIGNED) {
+      if (
+        !window.confirm(
+          `This ${docType} is SIGNED. Importing re-opens it to DRAFT and invalidates the signature (the old signature stays on record as historical). Continue?`,
+        )
+      )
+        return;
+    }
+    const res = (await dispatch({
+      type: "IMPORT_DOCUMENT",
+      productId: product.id,
+      docType: docTypeOf(art),
+      content: art.document.content,
+    })) as DispatchResult;
+    if (res.ok) {
+      setImportMsg(
+        `Imported ${docType} from file.${existing && existing.status === DocStatus.SIGNED ? " Re-run rigour and re-sign." : ""}`,
+      );
+    } else {
+      setImportMsg(res.message || res.code || "Import failed.");
+    }
+  }
+
+  if (!doc)
+    return (
+      <CreateDocPanel
+        product={product}
+        docType={docType}
+        docFor={docFor}
+        dispatch={dispatch}
+        onImport={() => importDocumentFlow(null)}
+        importMsg={importMsg}
+      />
+    );
 
   const checks = store.checksForDoc(doc.id);
   const hasRun = doc.status !== DocStatus.DRAFT || checks.length > 0;
@@ -194,11 +272,48 @@ function DocTab({
     return dispatch({ type: "SIGN", documentId: doc!.id });
   }
 
+  // ── per-artifact export / import (file round-trip for SharePoint; core/artifact.ts) ──
+  function exportArtifact() {
+    const sig = store.signatureForDoc(doc!.id);
+    const art = buildDocumentArtifact(doc!, sig, {
+      product,
+      placement: placementPath,
+      placeId: null, // placeId scopes the store key (per-place); header carries display context only
+      resolveUserName: (id) => resolveUser(id)?.name || id,
+    });
+    downloadTextFile(artifactFilename(art), artifactJson(art));
+  }
+
+  async function unlock() {
+    if (
+      !window.confirm(
+        `Unlock this signed ${docType} for editing? The signature is invalidated (kept on record as historical) and the document returns to DRAFT. Any downstream document is pulled back too.`,
+      )
+    )
+      return;
+    const res = (await dispatch({ type: "UNLOCK_DOCUMENT", documentId: doc!.id })) as DispatchResult;
+    if (!res.ok) setImportMsg(res.message || res.code || "Unlock failed.");
+  }
+
   const centre = (
     <div className="doc-shell">
       <div className="doc-shell__head">
         <div className="eyebrow eyebrow--teal">{`${docTypeTitle(docType)} · ${doc.status}`}</div>
         <div className="row gap-3" style={{ alignItems: "center" }}>
+          <button
+            className="btn btn--ghost"
+            title={`Export this ${docType} as a JSON file (save it to SharePoint)`}
+            onClick={exportArtifact}
+          >
+            ⭳ Export
+          </button>
+          <button
+            className="btn btn--ghost"
+            title={`Import a ${docType} from a JSON file (e.g. downloaded from SharePoint)`}
+            onClick={() => importDocumentFlow(doc)}
+          >
+            ⭱ Import
+          </button>
           <button
             className="btn btn--ghost"
             title={`Print this ${docType}`}
@@ -209,6 +324,11 @@ function DocTab({
           <div className="doc-shell__head-meta">{signature ? <span className="hl">signed</span> : "editable"}</div>
         </div>
       </div>
+      {importMsg ? (
+        <div className="rigour-gate__sub" style={{ padding: "0 16px", color: "var(--a)" }}>
+          {importMsg}
+        </div>
+      ) : null}
       <div className="doc-shell__body">
         {sections.map((s) => (
           <DocSection
@@ -231,7 +351,28 @@ function DocTab({
     ) : (
       <div className="stack gap-4">
         {signature && doc.status === DocStatus.SIGNED ? (
-          <SignatureRecord signature={signature} resolveUser={resolveUser} />
+          <Fragment>
+            <SignatureRecord signature={signature} resolveUser={resolveUser} />
+            <div className="card card--dashed" style={{ fontSize: ".76rem", color: "var(--label)", lineHeight: 1.5 }}>
+              <div className="eyebrow eyebrow--muted" style={{ marginBottom: "8px" }}>
+                Owner controls
+              </div>
+              {isOwner ? (
+                <Fragment>
+                  <button className="btn btn--ghost btn--block" onClick={unlock}>
+                    🔓 Unlock to edit
+                  </button>
+                  <div style={{ marginTop: "8px" }}>
+                    Re-opens this signed {docType} to DRAFT for editing. The signature is kept on record as
+                    historical and marked stale; any downstream document is pulled back and must be re-signed
+                    (invalidation cascade).
+                  </div>
+                </Fragment>
+              ) : (
+                <div>Only a Product Owner can unlock a signed document.</div>
+              )}
+            </div>
+          </Fragment>
         ) : (
           <Fragment>
             <RigourGate
@@ -260,11 +401,15 @@ function CreateDocPanel({
   docType,
   docFor,
   dispatch,
+  onImport,
+  importMsg,
 }: {
   product: DataProduct;
   docType: DocTypeValue;
   docFor: DocFor;
   dispatch: DispatchFn;
+  onImport: () => void;
+  importMsg: string | null;
 }) {
   let can = true;
   let why = "";
@@ -288,10 +433,26 @@ function CreateDocPanel({
       <div className="rigour-gate__sub" style={{ marginBottom: "12px" }}>
         {why}
       </div>
-      {can ? (
-        <button className="btn btn--primary" onClick={() => dispatch({ type: intent, productId: product.id } as Intent)}>
-          {`+ Create ${docType}`}
-        </button>
+      <div className="row gap-3" style={{ justifyContent: "center" }}>
+        {can ? (
+          <button className="btn btn--primary" onClick={() => dispatch({ type: intent, productId: product.id } as Intent)}>
+            {`+ Create ${docType}`}
+          </button>
+        ) : null}
+        {can ? (
+          <button
+            className="btn btn--ghost"
+            title={`Import a ${docType} from a JSON file (e.g. from SharePoint)`}
+            onClick={onImport}
+          >
+            ⭱ Import {docType} from file
+          </button>
+        ) : null}
+      </div>
+      {importMsg ? (
+        <div className="rigour-gate__sub" style={{ marginTop: "10px", color: "var(--a)" }}>
+          {importMsg}
+        </div>
       ) : null}
     </div>
   );
@@ -340,6 +501,7 @@ function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGr
   const [term, setTerm] = useState("");
   const [def, setDef] = useState("");
   const [warn, setWarn] = useState<string | null>(null);
+  const product = store.product(productId)!;
   const terms = state.glossaryTerms
     .filter((t) => t.dataProductId === productId)
     .sort((a, b) => a.term.localeCompare(b.term));
@@ -353,6 +515,43 @@ function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGr
     } else setWarn(res.message);
   };
 
+  const exportGlossary = () => {
+    const art = buildGlossaryArtifact(store.glossaryForProduct(productId), {
+      product,
+      placement: pathFor(state, product),
+      placeId: null,
+      resolveUserName: (id) => store.resolveUser(id)?.name || id,
+    });
+    downloadTextFile(artifactFilename(art), artifactJson(art));
+  };
+
+  const importGlossary = async () => {
+    let text: string | null;
+    try {
+      text = await pickTextFile();
+    } catch {
+      setWarn("Could not read the selected file.");
+      return;
+    }
+    if (text == null) return;
+    let art;
+    try {
+      art = parseArtifact(text);
+    } catch (e) {
+      setWarn(e instanceof ArtifactError ? e.message : "This file is not a valid duidelik artifact.");
+      return;
+    }
+    if (art.kind !== "GLOSSARY") {
+      setWarn(`That file is a ${art.kind} artifact — import it from the ${art.kind} tab, not the Glossary.`);
+      return;
+    }
+    const mismatch = productMismatchReason(art, product);
+    if (mismatch && !window.confirm(mismatch + "\n\nImport anyway?")) return;
+    const res = (await store.dispatch({ type: "IMPORT_GLOSSARY", productId, terms: art.terms })) as any;
+    if (res.ok) setWarn(`Imported glossary: ${res.added} added, ${res.updated} updated.`);
+    else setWarn(res.message || "Import failed.");
+  };
+
   return (
     <div className="card" style={{ borderTopLeftRadius: 0 }}>
       <div className="row row--between" style={{ marginBottom: "14px" }}>
@@ -361,6 +560,14 @@ function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGr
           <div className="rigour-gate__sub" style={{ margin: "4px 0 0" }}>
             Plain-language definitions scoped to this product. Editable at any stage — no gate.
           </div>
+        </div>
+        <div className="row gap-3">
+          <button className="btn btn--ghost" title="Export the glossary as a JSON file (save it to SharePoint)" onClick={exportGlossary}>
+            ⭳ Export
+          </button>
+          <button className="btn btn--ghost" title="Import glossary terms from a JSON file (merges by term)" onClick={importGlossary}>
+            ⭱ Import
+          </button>
         </div>
       </div>
       <div className="card card--subtle" style={{ marginBottom: "14px" }}>

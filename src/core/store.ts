@@ -17,7 +17,7 @@
 import { ulid } from "./ids";
 import { buildSeed } from "./seed";
 import { DocType, DocStatus, LifecycleStage, Role } from "./enums";
-import type { ScoreValue } from "./enums";
+import type { ScoreValue, DocTypeValue } from "./enums";
 import * as lc from "./lifecycle";
 import { signAndMaybeUnlock } from "./lifecycle";
 import { runRigour, applyOverride } from "./rigour";
@@ -63,8 +63,17 @@ export type Intent =
   | { type: "EDIT_DOCUMENT"; documentId: string; content?: DocContent }
   | { type: "APPLY_OVERRIDE"; checkId: string; note: string }
   | { type: "SIGN"; documentId: string }
+  // ── owner unlock: re-open a SIGNED document for editing (PO-gated). Routes through
+  //    the SAME invalidation path as an edit (LIFECYCLE §5): the old signature stays
+  //    on record as historical; the doc drops to DRAFT; downstream is pulled back. ──
+  | { type: "UNLOCK_DOCUMENT"; documentId: string }
   | { type: "PUBLISH_QRG"; productId: string }
   | { type: "ADD_GLOSSARY_TERM"; productId: string; term: string; definition: string }
+  // ── per-artifact import (file round-trip; see core/artifact.ts). A document import
+  //    always applies via EDIT_DOCUMENT so a signed doc re-opens to DRAFT (no forged
+  //    signature). Glossary import merges terms by case-insensitive term name. ──
+  | { type: "IMPORT_DOCUMENT"; productId: string; docType: DocTypeValue; content: DocContent }
+  | { type: "IMPORT_GLOSSARY"; productId: string; terms: Array<{ term: string; definition: string }> }
   // ── P3 house-session roster intents ──
   | { type: "ASSIGN_ROLE"; targetKey: string; role: RoleValue }
   | { type: "RENAME_MEMBER"; targetKey: string; name: string };
@@ -95,6 +104,8 @@ export interface Store {
   isPO: () => boolean;
   docsForProduct: (pid: string) => DuidelikDocument[];
   docOf: (pid: string, type: string) => DuidelikDocument | null;
+  glossaryForProduct: (pid: string) => GlossaryTerm[];
+  signatureForDoc: (did: string) => Signature | null;
   checksForDoc: (did: string) => RigourCheck[];
   placementIntact: (p: DataProduct) => boolean;
   signedBrdKeys: (p: DataProduct) => string[];
@@ -225,6 +236,12 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
   const resolveUser = (uid: string) => state.users.find((u) => u.id === uid) || null;
   const docsForProduct = (pid: string) => state.documents.filter((d) => d.dataProductId === pid);
   const docOf = (pid: string, type: string) => docsForProduct(pid).find((d) => d.type === type) || null;
+  const glossaryForProduct = (pid: string) =>
+    state.glossaryTerms.filter((t) => t.dataProductId === pid).sort((a, b) => a.term.localeCompare(b.term));
+  const signatureForDoc = (did: string): Signature | null => {
+    const sigs = state.signatures.filter((s) => s.documentId === did);
+    return sigs.length ? sigs[sigs.length - 1] : null;
+  };
   const product = (pid: string) => state.dataProducts.find((p) => p.id === pid) || null;
   const activeProducts = () => state.dataProducts.filter((p) => !p.archivedAt);
   const archivedProducts = () => state.dataProducts.filter((p) => !!p.archivedAt);
@@ -407,6 +424,89 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
       case "SIGN":
         return signIntent(intent, now);
 
+      case "UNLOCK_DOCUMENT": {
+        // Owner-only re-open of a SIGNED document. The engine already supports editing
+        // a signed doc (it drops to DRAFT + cascades, LIFECYCLE §5), but that is a side
+        // effect of editing; this makes re-opening a DELIBERATE, owner-gated action with
+        // no content change. Authorization reads the SAME actor as the sign gate
+        // (signingActor → roster in house mode, picker standalone), so "owner" == PO.
+        const gate = requirePO();
+        if (gate) return gate;
+        const doc = findDoc(intent.documentId);
+        if (doc.status !== DocStatus.SIGNED) {
+          return { ok: false, code: "NOT_SIGNED", message: "Only a signed document can be unlocked." };
+        }
+        const p = product(doc.dataProductId)!;
+        // No content change — editDocument(same content) drops SIGNED → DRAFT and runs
+        // invalidateDownstream. The old Signature stays on record (historical); its
+        // documentHash no longer matches the live doc, which is the proof it is stale.
+        const res = lc.editDocument(doc, p, docsForProduct(p.id), { now });
+        let nextState = withDoc(state, res.document);
+        if (res.invalidation) {
+          nextState = {
+            ...nextState,
+            dataProducts: upsert(nextState.dataProducts, res.invalidation.product),
+          };
+          for (const d of res.invalidation.documents) nextState = withDoc(nextState, d);
+        }
+        commit(nextState);
+        return { ok: true, document: res.document, invalidation: res.invalidation || null };
+      }
+
+      case "IMPORT_DOCUMENT": {
+        // Apply an imported artifact's content to this product's document of that type.
+        // Create the doc first if it does not exist yet (respecting the lifecycle gate
+        // — e.g. an FSD import still needs a signed BRD to exist). Then route the
+        // content through EDIT_DOCUMENT so a signed target re-opens to DRAFT: an import
+        // NEVER preserves a signature, so it can never forge a sign-off (RIGOUR §3).
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        let doc = docOf(p.id, intent.docType);
+        if (!doc) {
+          const created = createDocForImport(p, intent.docType, now);
+          if (!created.ok) return created;
+          doc = created.document!;
+        }
+        const edit = dispatch({ type: "EDIT_DOCUMENT", documentId: doc.id, content: intent.content }) as DispatchResult;
+        return edit;
+      }
+
+      case "IMPORT_GLOSSARY": {
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        const existing = state.glossaryTerms.filter((t) => t.dataProductId === p.id);
+        const byLower = new Map(existing.map((t) => [t.term.toLowerCase(), t]));
+        let added = 0;
+        let updated = 0;
+        let nextTerms = state.glossaryTerms.slice();
+        for (const row of intent.terms) {
+          const term = (row.term ?? "").trim();
+          const def = (row.definition ?? "").trim();
+          if (!term) continue;
+          const hit = byLower.get(term.toLowerCase());
+          if (hit) {
+            // merge: update the definition in place (idempotent re-import)
+            const u: GlossaryTerm = { ...hit, definition: def || hit.definition, updatedAt: now.toISOString() };
+            nextTerms = upsert(nextTerms, u);
+            updated++;
+          } else {
+            const gt: GlossaryTerm = {
+              id: genId(),
+              dataProductId: p.id,
+              term,
+              definition: def,
+              createdAt: now.toISOString(),
+              updatedAt: now.toISOString(),
+            };
+            nextTerms = [...nextTerms, gt];
+            byLower.set(term.toLowerCase(), gt);
+            added++;
+          }
+        }
+        commit({ ...state, glossaryTerms: nextTerms });
+        return { ok: true, added, updated };
+      }
+
       case "PUBLISH_QRG": {
         const p = product(intent.productId)!;
         return apply(() => lc.publishQrg(p, docOf(p.id, DocType.QRG), { now }));
@@ -567,6 +667,30 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     commit(withDoc(state, doc));
   }
 
+  // Create a BRD/FSD/QRG for an import when the product has none yet, honouring the
+  // lifecycle creation gates (createFsd still requires a SIGNED BRD, etc.). Returns the
+  // created document, or a gate error the caller surfaces. Does not touch content —
+  // the caller's EDIT_DOCUMENT writes the imported content next.
+  function createDocForImport(
+    p: DataProduct,
+    docType: DocTypeValue,
+    now: Date,
+  ): DispatchResult & { document?: DuidelikDocument } {
+    try {
+      let res: { product?: DataProduct; document?: DuidelikDocument };
+      if (docType === DocType.BRD) res = lc.createBrd(p, { genId, now });
+      else if (docType === DocType.FSD) res = lc.createFsd(p, docOf(p.id, DocType.BRD), { genId, now });
+      else res = lc.createQrg(p, docOf(p.id, DocType.FSD), { genId, now });
+      let next = state;
+      if (res.product) next = { ...next, dataProducts: upsert(next.dataProducts, res.product) };
+      if (res.document) next = withDoc(next, res.document);
+      commit(next);
+      return { ok: true, document: res.document };
+    } catch (e) {
+      return errResult(e);
+    }
+  }
+
   // ── export / import (STACK §3, first-class) ──
   function exportJson(): string {
     return JSON.stringify(state, null, 2);
@@ -597,6 +721,8 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     isPO,
     docsForProduct,
     docOf,
+    glossaryForProduct,
+    signatureForDoc,
     checksForDoc,
     placementIntact,
     signedBrdKeys,
