@@ -162,6 +162,11 @@ export interface PlaceMember {
   // or a short peer id until a PO renames. Never a security field.
   name: string;
   bootstrap: boolean; // true for the first-redeemer PO
+  // true when a PO onboarded this person BY NAME before they have redeemed a session —
+  // the row has a synthetic "pending:" key and null peerId/phone until a real redeem
+  // reconciles it. A pending member is a valid owner candidate (shows in the picker) but
+  // cannot itself sign until it binds to a session identity. Absent/false on normal rows.
+  pending?: boolean;
   createdAt: string;
   updatedAt: string;
 }
