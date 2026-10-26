@@ -21,6 +21,8 @@ import {
   ArtifactError,
 } from "../core/artifact";
 import { downloadTextFile, pickTextFile } from "../api/fileIo";
+import { buildOpenInProjectUrl } from "../api/projectLink";
+import { useSession } from "../context/SessionContext";
 import type { Store, Intent, DispatchResult } from "../core/store";
 import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck, RoadmapItem, RoadmapColumn } from "../types";
 import type { AiClient } from "../core/aiClient";
@@ -647,8 +649,13 @@ function RoadmapTab({
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [linkedProductId, setLinkedProductId] = useState<string>("");
+  const [daupProjectRef, setDaupProjectRef] = useState<string>("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
+
+  // Place context for the Open-in-Project hints (house mode only; standalone has none).
+  const session = useSession();
+  const placeId = session.mode === "house" ? session.placeId : null;
 
   const items = (state.roadmapItems ?? [])
     .filter((r) => r.dataProductId === productId)
@@ -660,6 +667,7 @@ function RoadmapTab({
     setTitle("");
     setNote("");
     setLinkedProductId("");
+    setDaupProjectRef("");
     setAdding(null);
     setEditingId(null);
   };
@@ -672,6 +680,7 @@ function RoadmapTab({
       title,
       note,
       linkedProductId: linkedProductId || null,
+      daupProjectRef: daupProjectRef.trim() || null,
     })) as any;
     if (res.ok) resetForm();
     else setWarn(res.message || "Could not add the tile.");
@@ -684,6 +693,7 @@ function RoadmapTab({
       title,
       note,
       linkedProductId: linkedProductId || null,
+      daupProjectRef: daupProjectRef.trim() || null,
     })) as any;
     if (res.ok) resetForm();
     else setWarn(res.message || "Could not save the tile.");
@@ -695,6 +705,7 @@ function RoadmapTab({
     setTitle(it.title);
     setNote(it.note);
     setLinkedProductId(it.linkedProductId || "");
+    setDaupProjectRef(it.daupProjectRef || "");
     setWarn(null);
   };
 
@@ -728,6 +739,18 @@ function RoadmapTab({
               </option>
             ))}
           </select>
+        </div>
+        <div className="field">
+          <label className="field__label">daup-projects reference (optional)</label>
+          <input
+            className="field__input"
+            placeholder="project.daup.co.za URL or a project/place handle"
+            value={daupProjectRef}
+            onChange={(e) => setDaupProjectRef(e.target.value)}
+          />
+          <div className="rigour-gate__sub" style={{ margin: "4px 0 0", fontSize: ".66rem" }}>
+            Adds an “Open in Project ↗” button. Opens the Project app (its own sign-in) — duidelik stores no project data.
+          </div>
         </div>
         <div className="row gap-3" style={{ justifyContent: "flex-end" }}>
           <button className="btn btn--ghost" onClick={resetForm}>
@@ -795,6 +818,7 @@ function RoadmapTab({
                       key={it.id}
                       item={it}
                       linked={it.linkedProductId ? store.product(it.linkedProductId) : null}
+                      placeId={placeId}
                       onOpenLinked={onOpenProduct}
                       onEdit={() => beginEdit(it)}
                       onRemove={() => remove(it)}
@@ -829,6 +853,7 @@ function RoadmapTab({
 function RoadmapTile({
   item,
   linked,
+  placeId,
   onOpenLinked,
   onEdit,
   onRemove,
@@ -836,12 +861,19 @@ function RoadmapTile({
 }: {
   item: RoadmapItem;
   linked: DataProduct | null;
+  placeId: string | null;
   onOpenLinked: (id: string) => void;
   onEdit: () => void;
   onRemove: () => void;
   onMove: (column: RoadmapColumn) => void;
 }) {
   const others = ROADMAP_COLUMNS.filter((c) => c.key !== item.column);
+  // A-i: build the Open-in-Project deep link from the tile's ref + place context.
+  // Null when the tile carries no daupProjectRef (no button rendered).
+  const projectUrl = buildOpenInProjectUrl({ daupProjectRef: item.daupProjectRef, placeId });
+  const openInProject = () => {
+    if (projectUrl && typeof window !== "undefined") window.open(projectUrl, "_blank", "noopener,noreferrer");
+  };
   return (
     <div className="card roadmap-tile" style={{ padding: "10px 12px" }}>
       <div className="row row--between" style={{ alignItems: "flex-start", gap: "8px" }}>
@@ -888,6 +920,18 @@ function RoadmapTile({
       ) : item.linkedProductId ? (
         <div className="rigour-gate__sub" style={{ marginTop: "8px", fontSize: ".68rem", color: "var(--amber)" }}>
           linked product not found
+        </div>
+      ) : null}
+      {projectUrl ? (
+        <div style={{ marginTop: "8px" }}>
+          <button
+            className="btn btn--ghost"
+            style={{ fontSize: ".68rem", padding: "4px 10px" }}
+            title="Open this project in the daup Project app (its own sign-in)"
+            onClick={openInProject}
+          >
+            Open in Project ↗
+          </button>
         </div>
       ) : null}
       <div className="row gap-2" style={{ marginTop: "10px", flexWrap: "wrap" }}>

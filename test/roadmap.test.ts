@@ -65,6 +65,22 @@ describe("Roadmap — add / order / columns", () => {
     expect(res.ok).toBe(true);
     expect(res.item.linkedProductId).toBe(other.id);
   });
+
+  it("stores and clears an optional daup-projects reference (A-i seam)", () => {
+    const s = freshStore();
+    const pid = aProduct(s).id;
+    const add = s.dispatch({
+      type: "ADD_ROADMAP_ITEM", productId: pid, column: "CURRENT", title: "P",
+      daupProjectRef: "https://project.daup.co.za/p/x",
+    }) as any;
+    expect(add.ok).toBe(true);
+    expect(add.item.daupProjectRef).toBe("https://project.daup.co.za/p/x");
+
+    // Editing with daupProjectRef: null clears it (undefined would leave it).
+    const cleared = s.dispatch({ type: "EDIT_ROADMAP_ITEM", itemId: add.item.id, daupProjectRef: null }) as any;
+    expect(cleared.ok).toBe(true);
+    expect(cleared.item.daupProjectRef).toBeNull();
+  });
 });
 
 describe("Roadmap — edit / move / remove", () => {
