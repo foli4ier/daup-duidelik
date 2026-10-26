@@ -135,3 +135,43 @@ export function renameMember(
   copy[idx] = { ...copy[idx], name: trimmed, updatedAt: now.toISOString() };
   return copy;
 }
+
+/**
+ * Onboard a person BY NAME (a PO action), before they have ever redeemed a session.
+ * Creates a roster row with a synthetic `pending:` key and null peerId/phone, so the
+ * person appears immediately as an owner candidate / in the role dropdowns. When that
+ * person later redeems a real session, reconciliation (binding the pending row to the
+ * real peer/phone key) is a separate concern — out of scope here; the `pending` flag
+ * marks the row for it. Throws if the actor is not a PRODUCT_OWNER or the name is empty.
+ *
+ * `genId` produces the unique suffix of the synthetic key (ULID in the store).
+ */
+export function onboardMember(
+  members: PlaceMember[],
+  actor: SessionIdentity,
+  name: string,
+  role: RoleValue,
+  genId: () => string,
+  now: Date = new Date(),
+): { members: PlaceMember[]; member: PlaceMember } {
+  const actorMember = findMember(members, actor);
+  if (!actorMember || actorMember.role !== Role.PRODUCT_OWNER) {
+    throw new Error("Only a Product Owner can onboard members.");
+  }
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) throw new Error("Name must be non-empty.");
+
+  const iso = now.toISOString();
+  const member: PlaceMember = {
+    key: "pending:" + genId(),
+    peerId: null,
+    phone: null,
+    role,
+    name: trimmed,
+    bootstrap: false,
+    pending: true,
+    createdAt: iso,
+    updatedAt: iso,
+  };
+  return { members: [...members, member], member };
+}

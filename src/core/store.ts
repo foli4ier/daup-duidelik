@@ -23,7 +23,7 @@ import { signAndMaybeUnlock } from "./lifecycle";
 import { runRigour, applyOverride } from "./rigour";
 import { defaultHash } from "./signing";
 import { keysFor } from "./checklists";
-import { ensureMember, resolveRole, assignRole, renameMember, memberKey } from "./roster";
+import { ensureMember, resolveRole, assignRole, renameMember, onboardMember, memberKey } from "./roster";
 import type { SessionIdentity } from "./roster";
 import { localStorageAdapter, memoryAdapter } from "../api/persistence";
 import type { PersistenceAdapter } from "../api/persistence";
@@ -87,7 +87,8 @@ export type Intent =
   | { type: "REMOVE_ROADMAP_ITEM"; itemId: string }
   // ── P3 house-session roster intents ──
   | { type: "ASSIGN_ROLE"; targetKey: string; role: RoleValue }
-  | { type: "RENAME_MEMBER"; targetKey: string; name: string };
+  | { type: "RENAME_MEMBER"; targetKey: string; name: string }
+  | { type: "ONBOARD_MEMBER"; name: string; role: RoleValue };
 
 export type DispatchResult = { ok: boolean; code?: string; message?: string } & Record<string, unknown>;
 
@@ -679,6 +680,19 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
           const next = renameMember(members(), session, intent.targetKey, intent.name, now);
           commit({ ...state, members: next });
           return { ok: true, members: next };
+        } catch (e) {
+          return { ok: false, code: "ERROR", message: (e as Error).message };
+        }
+      }
+
+      case "ONBOARD_MEMBER": {
+        if (!houseMode || !session) {
+          return { ok: false, code: "NOT_HOUSE_MODE", message: "Onboarding a member is only available under a house session." };
+        }
+        try {
+          const { members: next, member } = onboardMember(members(), session, intent.name, intent.role, genId, now);
+          commit({ ...state, members: next });
+          return { ok: true, members: next, member };
         } catch (e) {
           return { ok: false, code: "ERROR", message: (e as Error).message };
         }

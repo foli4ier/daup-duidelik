@@ -259,6 +259,31 @@ describe("P3.3 store in house mode — sign gate reads the roster", () => {
     // ownerId set to a roster key still resolves to a name (print / display).
     expect(po.resolveUser(baMember.key)?.name).toBe("A. Botha");
   });
+
+  it("a PO can rename a member and onboard a named PO; both show in the owner dropdown (Option A)", () => {
+    const po = createStore({ adapter: memoryAdapter(), genId: counterId(), clock: fixedClock, placeId: "ob", session: { peerId: "peer-po", phone: null } });
+    const poKey = po.actingMember()!.key;
+
+    // (1) Rename the bootstrap member (the masked `…1373`-style default) to a real name.
+    const renamed = po.dispatch({ type: "RENAME_MEMBER", targetKey: poKey, name: "C. Willemburg" }) as any;
+    expect(renamed.ok).toBe(true);
+    expect(po.ownerCandidates().find((c) => c.id === poKey)?.name).toBe("C. Willemburg");
+
+    // (2) Onboard a NEW person by name as a Product Owner, before they ever redeem.
+    const onboarded = po.dispatch({ type: "ONBOARD_MEMBER", name: "S. White", role: Role.PRODUCT_OWNER }) as any;
+    expect(onboarded.ok).toBe(true);
+    expect(onboarded.member.pending).toBe(true);
+    expect(onboarded.member.key.startsWith("pending:")).toBe(true);
+    const cands = po.ownerCandidates();
+    expect(cands.some((c) => c.name === "S. White")).toBe(true);
+    // the onboarded PO resolves to its name for ownerId display/print.
+    expect(po.resolveUser(onboarded.member.key)?.name).toBe("S. White");
+
+    // (3) A non-PO cannot onboard.
+    const ba = createStore({ adapter: memoryAdapter(JSON.parse(po.exportJson())), genId: counterId(), clock: fixedClock, placeId: "ob", session: { peerId: "peer-ba", phone: null } });
+    const refused = ba.dispatch({ type: "ONBOARD_MEMBER", name: "Nope", role: Role.PRODUCT_OWNER }) as any;
+    expect(refused.ok).toBe(false);
+  });
 });
 
 describe("P3.4 placeId scoping (O2 — shared per place)", () => {
