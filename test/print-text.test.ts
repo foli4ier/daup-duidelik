@@ -6,7 +6,7 @@
 // everything is HTML-escaped (no injection from author content).
 
 import { describe, it, expect } from "vitest";
-import { renderRichText, escapeHtml } from "../src/pages/Product";
+import { renderRichText, escapeHtml, renderObjectArrayTable, titleCase } from "../src/pages/Product";
 
 describe("renderRichText — numbered enumerations", () => {
   it("renders a 1. 2. 3. run-on as an ordered list with the markers stripped", () => {
@@ -60,5 +60,52 @@ describe("renderRichText — escaping", () => {
 
   it("escapeHtml handles the five special chars", () => {
     expect(escapeHtml('& < > "')).toBe("&amp; &lt; &gt; &quot;");
+  });
+});
+
+describe("renderObjectArrayTable — object arrays print as a grid", () => {
+  it("renders success metrics as a table with title-cased headers and one row per metric", () => {
+    const metrics = [
+      { metric: "Adoption Rate", baseline: "50 %", target: "80 %", by: "end of 2028" },
+      { metric: "SLA Delivery Adherence", baseline: "98 %", target: "99 %", by: "end of 2028" },
+    ];
+    const html = renderObjectArrayTable(metrics);
+    expect(html).toContain("<table");
+    expect(html).toContain("<th>Metric</th>");
+    expect(html).toContain("<th>Baseline</th>");
+    expect(html).toContain("<th>Target</th>");
+    expect(html).toContain("<th>By</th>");
+    // one <tr> in thead + one per metric row
+    expect((html.match(/<tbody>[\s\S]*<\/tbody>/) || [""])[0].match(/<tr>/g)!.length).toBe(2);
+    expect(html).toContain("<td>Adoption Rate</td>");
+    expect(html).toContain("<td>80 %</td>");
+  });
+
+  it("unions columns across rows in first-seen order and dashes empty cells", () => {
+    const rows = [
+      { name: "ERP Sales Ledger", type: "Transaction Engine" },
+      { name: "Store Master Data", type: "Profit Center Registry", owner: "Finance" },
+    ];
+    const html = renderObjectArrayTable(rows);
+    expect(html).toContain("<th>Name</th>");
+    expect(html).toContain("<th>Type</th>");
+    expect(html).toContain("<th>Owner</th>"); // appears from row 2, still a column
+    // row 1 has no owner → dash cell
+    expect(html).toContain("—");
+  });
+
+  it("escapes cell content", () => {
+    const html = renderObjectArrayTable([{ name: "<x> & 'y'", type: "t" }]);
+    expect(html).not.toContain("<x>");
+    expect(html).toContain("&lt;x&gt;");
+    expect(html).toContain("&amp;");
+  });
+});
+
+describe("titleCase", () => {
+  it("humanises content field keys", () => {
+    expect(titleCase("metric")).toBe("Metric");
+    expect(titleCase("brdRef")).toBe("Brd Ref");
+    expect(titleCase("owner_name")).toBe("Owner Name");
   });
 });

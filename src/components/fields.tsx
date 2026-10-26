@@ -9,6 +9,7 @@
 // human sees WHY an item is amber/red at the point of editing (§6.9).
 // Ported from app/ui/fields.js (hyperscript → JSX).
 
+import { useState } from "react";
 import { Score } from "../core/enums";
 import type { SectionSchema, FieldSchema } from "./docSchemas";
 import type { RigourCheck, User, DataProduct, DocContent } from "../types";
@@ -20,6 +21,54 @@ interface FieldCtx {
   users: User[];
   placementPath?: string;
   signedBrdKeys?: string[];
+  // When present, the one-liner (a DataProduct field, not doc content) is EDITABLE in
+  // place and this commits the change via an EDIT_ONELINER product intent. Absent =
+  // read-only (the prior behaviour). Editing the one-liner never touches doc status.
+  onEditOneLiner?: (next: string) => void;
+}
+
+// Editable-with-save one-liner: shows the request text, an Edit affordance, and a
+// textarea + Save/Cancel when editing. Read-only when no onEditOneLiner handler.
+function OneLiner({ value, onSave }: { value: string; onSave?: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  if (!onSave) return <div className="doc-section__value">{`"${value || ""}"`}</div>;
+  if (!editing) {
+    return (
+      <div className="row gap-3" style={{ alignItems: "flex-start" }}>
+        <div className="doc-section__value" style={{ flex: 1 }}>{`"${value || ""}"`}</div>
+        <button
+          className="btn btn--ghost"
+          onClick={() => {
+            setDraft(value);
+            setEditing(true);
+          }}
+        >
+          Edit
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="stack gap-2">
+      <textarea className="field__textarea" value={draft} onChange={(e) => setDraft(e.target.value)} />
+      <div className="row gap-2">
+        <button
+          className="btn btn--ai"
+          disabled={!draft.trim()}
+          onClick={() => {
+            onSave(draft.trim());
+            setEditing(false);
+          }}
+        >
+          Save one-liner
+        </button>
+        <button className="btn btn--ghost" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── per-field editors ──────────────────────────────────────────────────────────
@@ -277,7 +326,7 @@ function Field({ field, content, onPatch, ctx }: { field: FieldSchema; content: 
 
   switch (field.kind) {
     case "readonly-oneliner":
-      return <div className="doc-section__value">{`"${ctx.product?.oneLiner || ""}"`}</div>;
+      return <OneLiner value={ctx.product?.oneLiner || ""} onSave={ctx.onEditOneLiner} />;
     case "readonly-breadcrumb":
       return <div className="doc-section__value">{ctx.placementPath || "—"}</div>;
     case "text":

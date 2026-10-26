@@ -48,6 +48,7 @@ const SCHEMA_VERSION = 3;
 export type Intent =
   | { type: "SET_ACTING_USER"; userId: string }
   | { type: "REGISTER_PRODUCT"; code: string; subDomainId: string; name: string; oneLiner: string; ownerId?: string | null }
+  | { type: "EDIT_ONELINER"; productId: string; oneLiner: string }
   | { type: "CREATE_SUBDOMAIN"; domainId: string; name: string }
   // ── registry admin (PO-only): archive products, rename tree nodes ──
   | { type: "ARCHIVE_PRODUCT"; productId: string }
@@ -292,6 +293,21 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
         };
         commit({ ...state, dataProducts: [...state.dataProducts, p] });
         return { ok: true, product: p };
+      }
+
+      case "EDIT_ONELINER": {
+        // The one-liner is the product's originating request text (DataProduct.oneLiner),
+        // NOT BRD content — so editing it is a product-field update and deliberately does
+        // NOT touch any document status or trigger the signature-invalidation cascade.
+        // Ungated: it is the request statement, editable at any stage (the BRD's own
+        // content.oneLiner mirror, if the author set one, is edited separately in the doc).
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        const oneLiner = (intent.oneLiner ?? "").trim();
+        if (!oneLiner) return { ok: false, code: "EMPTY", message: "The one-liner cannot be empty." };
+        const updated: DataProduct = { ...p, oneLiner, updatedAt: now.toISOString() };
+        commit({ ...state, dataProducts: upsert(state.dataProducts, updated) });
+        return { ok: true, product: updated };
       }
 
       case "CREATE_SUBDOMAIN": {

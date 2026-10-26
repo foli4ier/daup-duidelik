@@ -243,7 +243,13 @@ function DocTab({
   const signature = latestSignature(state, doc.id);
   const signedBrd = docFor(DocType.BRD);
   const signedBrdKeys = signedBrd && signedBrd.status === DocStatus.SIGNED ? Object.keys(signedBrd.content || {}) : [];
-  const ctx = { product, users: state.users, placementPath, signedBrdKeys };
+  const ctx = {
+    product,
+    users: state.users,
+    placementPath,
+    signedBrdKeys,
+    onEditOneLiner: (next: string) => dispatch({ type: "EDIT_ONELINER", productId: product.id, oneLiner: next }),
+  };
 
   const patch = (nextContent: DocContent) => dispatch({ type: "EDIT_DOCUMENT", documentId: doc.id, content: nextContent });
 
@@ -643,7 +649,14 @@ function printDocument({
     if (v == null || v === "") return '<span class="muted">—</span>';
     if (Array.isArray(v)) {
       if (!v.length) return '<span class="muted">—</span>';
-      return "<ul>" + v.map((it) => "<li>" + (it && typeof it === "object" ? renderObj(it as Record<string, unknown>) : esc(it)) + "</li>").join("") + "</ul>";
+      // An array of OBJECTS (success metrics, data sources, requirements…) prints as a
+      // readable TABLE — one row per item, one column per field — instead of nested
+      // "key: value" bullets (the reported problem). A scalar array stays a bullet list.
+      const objectRows = v.filter((it) => it && typeof it === "object" && !Array.isArray(it));
+      if (objectRows.length === v.length) {
+        return renderObjectArrayTable(v as Array<Record<string, unknown>>);
+      }
+      return "<ul>" + v.map((it) => "<li>" + (it && typeof it === "object" ? renderObj(it as Record<string, unknown>) : escapeHtml(it)) + "</li>").join("") + "</ul>";
     }
     if (typeof v === "object") return renderObj(v as Record<string, unknown>);
     return renderText(v);
@@ -656,7 +669,12 @@ function printDocument({
           let v: unknown;
           if (f.kind === "readonly-oneliner") v = product.oneLiner;
           else if (f.kind === "readonly-breadcrumb") v = placementPath;
-          else v = content[f.key];
+          else if (f.kind === "owner-picker") {
+            // content.ownerId is a ULID — print the person's NAME, not the raw id.
+            const oid = (content[f.key] as string) || product.ownerId || null;
+            const u = oid ? resolveUser(oid) : null;
+            v = u ? `${u.name} (${roleLabel(u.role)})` : oid || null;
+          } else v = content[f.key];
           return `<div class="field"><div class="flabel">${esc(f.label)}</div><div class="fval">${renderVal(v)}</div></div>`;
         })
         .join("");
@@ -697,6 +715,11 @@ function printDocument({
   .fval p { margin:4px 0; }
   ol.decision-list { margin:4px 0 4px 20px; padding:0; }
   ol.decision-list li { margin:4px 0; padding-left:4px; line-height:1.45; }
+  table.grid { width:100%; border-collapse:collapse; margin:4px 0 8px; font-size:.82rem; }
+  table.grid th { text-align:left; font-size:.64rem; text-transform:uppercase; letter-spacing:.04em; color:#667; border-bottom:1.5px solid #cdd3d8; padding:4px 8px 4px 0; white-space:nowrap; }
+  table.grid td { vertical-align:top; padding:5px 8px 5px 0; border-bottom:1px solid #eef1f3; color:#223; }
+  table.grid tr:last-child td { border-bottom:0; }
+  table.grid td b { color:#445; font-weight:600; }
   .btn { font:inherit; padding:8px 16px; border:1px solid #008b83; background:#008b83; color:#fff; border-radius:6px; cursor:pointer; }
   .foot { margin-top:24px; font-size:.68rem; color:#99a; border-top:1px solid #eee; padding-top:8px; }
 </style></head><body>
@@ -718,6 +741,75 @@ function printDocument({
   w.document.open();
   w.document.write(html);
   w.document.close();
+}
+
+// Render an array of like-shaped objects as a readable table — one row per item, one
+// column per field, headers title-cased ("metric" → "Metric"). Columns are the union
+// of keys in first-seen order. A cell that is itself an array/object is rendered
+// compactly (joined scalars / "k: v" pairs) so the table stays flat. Empty cells show
+// a dash. Presentation only; always escapes. This is what turns the nested
+// "metric: … target: … baseline: …" bullet blobs into a scannable grid.
+export function renderObjectArrayTable(rows: Array<Record<string, unknown>>): string {
+  const cols: string[] = [];
+  for (const row of rows) {
+    for (const k of Object.keys(row || {})) if (!cols.includes(k)) cols.push(k);
+  }
+  if (!cols.length) return '<span class="muted">—</span>';
+  const head = "<tr>" + cols.map((c) => "<th>" + escapeHtml(titleCase(c)) + "</th>").join("") + "</tr>";
+  const body = rows
+    .map((row) => {
+      const cells = cols
+        .map((c) => "<td>" + renderCell((row || {})[c]) + "</td>")
+        .join("");
+      return "<tr>" + cells + "</tr>";
+    })
+    .join("");
+  return '<table class="grid"><thead>' + head + "</thead><tbody>" + body + "</tbody></table>";
+}
+
+// A single table cell: scalars escaped; a scalar array joined with "; "; an object as
+// compact "key: value" pairs. Keeps a row on one line rather than nesting a sub-list.
+function renderCell(v: unknown): string {
+  if (v == null || v === "") return '<span class="muted">—</span>';
+  if (Array.isArray(v)) {
+    if (!v.length) return '<span class="muted">—</span>';
+    return v
+      .map((it) => (it && typeof it === "object" ? compactObject(it as Record<string, unknown>) : escapeHtml(it)))
+      .join("; ");
+  }
+  if (typeof v === "object") return compactObject(v as Record<string, unknown>);
+  return escapeHtml(v);
+}
+
+function compactObject(o: Record<string, unknown>): string {
+  return Object.entries(o)
+    .filter(([, val]) => val != null && val !== "")
+    .map(([k, val]) => "<b>" + escapeHtml(titleCase(k)) + ":</b> " + (typeof val === "object" ? escapeHtml(JSON.stringify(val)) : escapeHtml(val)))
+    .join(", ");
+}
+
+// "metric" → "Metric"; "brdRef" → "Brd Ref"; "owner" → "Owner". Best-effort label-ising
+// of a content field key for a table header.
+export function titleCase(key: string): string {
+  const spaced = String(key || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Human label for a Role enum value (print only; panels.tsx has its own copy).
+function roleLabel(role: string): string {
+  return (
+    (
+      {
+        PRODUCT_OWNER: "Product Owner",
+        PRODUCT_MANAGER: "Product Manager",
+        BUSINESS_ANALYST: "Business Analyst",
+        FUNCTIONAL_ANALYST: "Functional Analyst",
+      } as Record<string, string>
+    )[role] || role
+  );
 }
 
 // ── helpers ──

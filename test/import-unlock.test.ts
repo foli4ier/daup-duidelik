@@ -131,6 +131,28 @@ describe("IMPORT_DOCUMENT — applying an artifact never forges a signature", ()
   });
 });
 
+describe("EDIT_ONELINER — editing the product one-liner", () => {
+  it("updates the one-liner without touching any document status (no invalidation)", () => {
+    const s = freshStore();
+    s.dispatch({ type: "SET_ACTING_USER", userId: poId(s) });
+    const p = signedBrdProduct(s); // has a SIGNED BRD + stage FSD
+    const r = s.dispatch({ type: "EDIT_ONELINER", productId: p.id, oneLiner: "A revised one-line request." }) as any;
+    expect(r.ok).toBe(true);
+    expect(s.product(p.id)!.oneLiner).toBe("A revised one-line request.");
+    // the signed BRD and the product stage are UNTOUCHED — the one-liner is not doc content
+    expect(s.docOf(p.id, DocType.BRD)!.status).toBe(DocStatus.SIGNED);
+    expect(s.product(p.id)!.stage).toBe(LifecycleStage.FSD);
+  });
+
+  it("rejects an empty one-liner", () => {
+    const s = freshStore();
+    const p = s.getState().dataProducts[0];
+    const r = s.dispatch({ type: "EDIT_ONELINER", productId: p.id, oneLiner: "   " }) as any;
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe("EMPTY");
+  });
+});
+
 describe("IMPORT_GLOSSARY — merge by term name", () => {
   it("adds new terms and updates existing ones (case-insensitive) without duplicating", () => {
     const s = freshStore();
