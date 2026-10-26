@@ -149,6 +149,7 @@ export function buildSeed(
     signatures: [],
     users,
     members: [],
+    roadmapItems: [],
   };
 }
 

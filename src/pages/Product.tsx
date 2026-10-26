@@ -22,10 +22,11 @@ import {
 } from "../core/artifact";
 import { downloadTextFile, pickTextFile } from "../api/fileIo";
 import type { Store, Intent, DispatchResult } from "../core/store";
-import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck } from "../types";
+import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck, RoadmapItem, RoadmapColumn } from "../types";
 import type { AiClient } from "../core/aiClient";
 
-const TABS: (DocTypeValue | "GLOSSARY")[] = [DocType.BRD, DocType.FSD, DocType.QRG, "GLOSSARY"];
+type TabKey = DocTypeValue | "GLOSSARY" | "ROADMAP";
+const TABS: TabKey[] = [DocType.BRD, DocType.FSD, DocType.QRG, "GLOSSARY", "ROADMAP"];
 
 type DocFor = (type: DocTypeValue) => DuidelikDocument | null;
 type DispatchFn = (intent: Intent) => Promise<DispatchResult>;
@@ -35,16 +36,18 @@ export function ProductScreen({
   state,
   productId,
   onBack,
+  onOpenProduct,
   aiClient,
 }: {
   store: Store;
   state: StoreGraph;
   productId: string;
   onBack: () => void;
+  onOpenProduct: (id: string) => void;
   aiClient: AiClient | null;
 }) {
   const product = store.product(productId);
-  const [tab, setTab] = useState<DocTypeValue | "GLOSSARY">(DocType.BRD);
+  const [tab, setTab] = useState<TabKey>(DocType.BRD);
   const [banner, setBanner] = useState<string | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   // Runtime AI reachability. Starts optimistic (a transport is wired) and flips false
@@ -112,6 +115,8 @@ export function ProductScreen({
         <div className="mt-4">
           {tab === "GLOSSARY" ? (
             <GlossaryTab store={store} state={state} productId={productId} />
+          ) : tab === "ROADMAP" ? (
+            <RoadmapTab store={store} state={state} productId={productId} onOpenProduct={onOpenProduct} />
           ) : (
             <DocTab
               store={store}
@@ -615,6 +620,293 @@ function GlossaryTab({ store, state, productId }: { store: Store; state: StoreGr
   );
 }
 
+// ── Roadmap tab ──────────────────────────────────────────────────────────────
+// A per-product kanban: three columns (Current / Planned / Future) of project tiles.
+// Each tile may link to another registry DataProduct (one source of truth). Authoring
+// is ungated (like the glossary) and never touches document status / rigour / signing.
+// The daup-projects integration + the Gantt project-plan editor are a DEFERRED, scoped
+// piece — a tile carries a daupProjectRef seam but nothing opens daup-projects yet.
+const ROADMAP_COLUMNS: { key: RoadmapColumn; label: string; hint: string }[] = [
+  { key: "CURRENT", label: "Current", hint: "In flight now" },
+  { key: "PLANNED", label: "Planned", hint: "Committed, not started" },
+  { key: "FUTURE", label: "Future", hint: "Candidate / someday" },
+];
+
+function RoadmapTab({
+  store,
+  state,
+  productId,
+  onOpenProduct,
+}: {
+  store: Store;
+  state: StoreGraph;
+  productId: string;
+  onOpenProduct: (id: string) => void;
+}) {
+  const [adding, setAdding] = useState<RoadmapColumn | null>(null);
+  const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
+  const [linkedProductId, setLinkedProductId] = useState<string>("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
+
+  const items = (state.roadmapItems ?? [])
+    .filter((r) => r.dataProductId === productId)
+    .sort((a, b) => a.order - b.order);
+  // Candidate link targets: every active product in the registry except this one.
+  const linkTargets = store.activeProducts().filter((p) => p.id !== productId);
+
+  const resetForm = () => {
+    setTitle("");
+    setNote("");
+    setLinkedProductId("");
+    setAdding(null);
+    setEditingId(null);
+  };
+
+  const submitAdd = async (column: RoadmapColumn) => {
+    const res = (await store.dispatch({
+      type: "ADD_ROADMAP_ITEM",
+      productId,
+      column,
+      title,
+      note,
+      linkedProductId: linkedProductId || null,
+    })) as any;
+    if (res.ok) resetForm();
+    else setWarn(res.message || "Could not add the tile.");
+  };
+
+  const submitEdit = async (itemId: string) => {
+    const res = (await store.dispatch({
+      type: "EDIT_ROADMAP_ITEM",
+      itemId,
+      title,
+      note,
+      linkedProductId: linkedProductId || null,
+    })) as any;
+    if (res.ok) resetForm();
+    else setWarn(res.message || "Could not save the tile.");
+  };
+
+  const beginEdit = (it: RoadmapItem) => {
+    setEditingId(it.id);
+    setAdding(null);
+    setTitle(it.title);
+    setNote(it.note);
+    setLinkedProductId(it.linkedProductId || "");
+    setWarn(null);
+  };
+
+  const move = (it: RoadmapItem, column: RoadmapColumn) => {
+    void store.dispatch({ type: "MOVE_ROADMAP_ITEM", itemId: it.id, column });
+  };
+  const remove = (it: RoadmapItem) => {
+    if (window.confirm(`Remove the roadmap tile "${it.title}"?`)) {
+      void store.dispatch({ type: "REMOVE_ROADMAP_ITEM", itemId: it.id });
+    }
+  };
+
+  const addForm = (column: RoadmapColumn) => (
+    <div className="card card--subtle" style={{ marginBottom: "10px" }}>
+      <div className="stack gap-3">
+        <div className="field">
+          <label className="field__label">Project title</label>
+          <input className="field__input" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+        </div>
+        <div className="field">
+          <label className="field__label">Note (optional)</label>
+          <input className="field__input" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+        <div className="field">
+          <label className="field__label">Link to a registry product (optional)</label>
+          <select className="field__select" value={linkedProductId} onChange={(e) => setLinkedProductId(e.target.value)}>
+            <option value="">— none —</option>
+            {linkTargets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.code} · {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="row gap-3" style={{ justifyContent: "flex-end" }}>
+          <button className="btn btn--ghost" onClick={resetForm}>
+            Cancel
+          </button>
+          <button
+            className="btn btn--ai"
+            disabled={!title.trim()}
+            onClick={() => (editingId ? submitEdit(editingId) : submitAdd(column))}
+          >
+            {editingId ? "Save" : "Add tile"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="card" style={{ borderTopLeftRadius: 0 }}>
+      <div className="row row--between" style={{ marginBottom: "14px" }}>
+        <div>
+          <div className="eyebrow eyebrow--teal">{`Roadmap — ${items.length} project${items.length === 1 ? "" : "s"}`}</div>
+          <div className="rigour-gate__sub" style={{ margin: "4px 0 0" }}>
+            Projects for this product across Current / Planned / Future. Tiles can link to a registry product.
+            <span style={{ color: "var(--fg-3)" }}> daup-projects integration + project plans are a later wave.</span>
+          </div>
+        </div>
+      </div>
+
+      {warn ? (
+        <div className="rigour-gate__sub" style={{ marginBottom: "10px", color: "var(--amber)" }}>
+          {warn}
+        </div>
+      ) : null}
+
+      <div className="roadmap-board" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
+        {ROADMAP_COLUMNS.map((col) => {
+          const colItems = items.filter((r) => r.column === col.key);
+          return (
+            <div key={col.key} className="card card--subtle roadmap-col" style={{ minHeight: "120px" }}>
+              <div className="row row--between" style={{ marginBottom: "8px", alignItems: "baseline" }}>
+                <div>
+                  <div className="eyebrow eyebrow--muted">{col.label}</div>
+                  <div className="rigour-gate__sub" style={{ margin: "2px 0 0", fontSize: ".64rem" }}>
+                    {col.hint}
+                  </div>
+                </div>
+                <span className="chip chip--locked" style={{ fontSize: ".62rem" }}>
+                  {colItems.length}
+                </span>
+              </div>
+
+              {colItems.length === 0 && adding !== col.key ? (
+                <div className="rigour-gate__sub" style={{ fontSize: ".72rem", padding: "6px 0" }}>
+                  No projects.
+                </div>
+              ) : null}
+
+              <div className="stack gap-3">
+                {colItems.map((it) =>
+                  editingId === it.id ? (
+                    <Fragment key={it.id}>{addForm(col.key)}</Fragment>
+                  ) : (
+                    <RoadmapTile
+                      key={it.id}
+                      item={it}
+                      linked={it.linkedProductId ? store.product(it.linkedProductId) : null}
+                      onOpenLinked={onOpenProduct}
+                      onEdit={() => beginEdit(it)}
+                      onRemove={() => remove(it)}
+                      onMove={(c) => move(it, c)}
+                    />
+                  ),
+                )}
+              </div>
+
+              {adding === col.key ? (
+                <div className="mt-4">{addForm(col.key)}</div>
+              ) : (
+                <button
+                  className="btn btn--ghost"
+                  style={{ width: "100%", marginTop: "10px" }}
+                  onClick={() => {
+                    resetForm();
+                    setAdding(col.key);
+                  }}
+                >
+                  + Add project
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RoadmapTile({
+  item,
+  linked,
+  onOpenLinked,
+  onEdit,
+  onRemove,
+  onMove,
+}: {
+  item: RoadmapItem;
+  linked: DataProduct | null;
+  onOpenLinked: (id: string) => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  onMove: (column: RoadmapColumn) => void;
+}) {
+  const others = ROADMAP_COLUMNS.filter((c) => c.key !== item.column);
+  return (
+    <div className="card roadmap-tile" style={{ padding: "10px 12px" }}>
+      <div className="row row--between" style={{ alignItems: "flex-start", gap: "8px" }}>
+        <div style={{ fontWeight: 800, fontSize: ".82rem" }}>{item.title}</div>
+        <div className="row gap-2">
+          <span
+            role="button"
+            tabIndex={0}
+            title="Edit"
+            style={{ cursor: "pointer", color: "var(--label)", fontSize: ".72rem" }}
+            onClick={onEdit}
+          >
+            edit
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            title="Remove"
+            style={{ cursor: "pointer", color: "var(--label)", fontSize: ".72rem" }}
+            onClick={onRemove}
+          >
+            ✕
+          </span>
+        </div>
+      </div>
+      {item.note ? (
+        <div className="rigour-gate__sub" style={{ margin: "6px 0 0", fontSize: ".74rem", color: "var(--fg-2)" }}>
+          {item.note}
+        </div>
+      ) : null}
+      {linked ? (
+        <div style={{ marginTop: "8px" }}>
+          <span
+            role="button"
+            tabIndex={0}
+            className="chip chip--active"
+            style={{ cursor: "pointer", fontWeight: 700 }}
+            title={`Open ${linked.code}`}
+            onClick={() => onOpenLinked(linked.id)}
+          >
+            🔗 {linked.code}
+          </span>
+        </div>
+      ) : item.linkedProductId ? (
+        <div className="rigour-gate__sub" style={{ marginTop: "8px", fontSize: ".68rem", color: "var(--amber)" }}>
+          linked product not found
+        </div>
+      ) : null}
+      <div className="row gap-2" style={{ marginTop: "10px", flexWrap: "wrap" }}>
+        {others.map((c) => (
+          <button
+            key={c.key}
+            className="btn btn--ghost"
+            style={{ fontSize: ".66rem", padding: "4px 8px" }}
+            title={`Move to ${c.label}`}
+            onClick={() => onMove(c.key)}
+          >
+            → {c.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── print ──
 // Opens a clean, self-contained print window for a BRD/FSD/QRG. Renders the document
 // from the same section schema the editor uses (so all three doc types print
@@ -854,7 +1146,9 @@ export function renderRichText(v: unknown): string {
 }
 
 function tabLabel(t: string) {
-  return t === "GLOSSARY" ? "Glossary" : t;
+  if (t === "GLOSSARY") return "Glossary";
+  if (t === "ROADMAP") return "Roadmap";
+  return t;
 }
 function docTypeTitle(t: string) {
   return (

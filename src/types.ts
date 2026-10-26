@@ -87,6 +87,28 @@ export interface GlossaryTerm {
   updatedAt: string;
 }
 
+// A roadmap tile scoped to one data product (the Roadmap tab, right of Glossary).
+// Each tile represents a project on the product's roadmap and lives in one of three
+// kanban columns (CURRENT | PLANNED | FUTURE). It MAY link to another DataProduct in
+// this registry (linkedProductId) so the roadmap and the registry stay one source of
+// truth. `daupProjectRef` is a FORWARD seam for the deferred daup-projects integration
+// (a project id/URL) — unused in v1 beyond being stored; the cross-app link + the
+// project-plan editor are a separate scoped piece (see this turn's scope decision).
+export type RoadmapColumn = "CURRENT" | "PLANNED" | "FUTURE";
+
+export interface RoadmapItem {
+  id: string;
+  dataProductId: string;
+  column: RoadmapColumn;
+  title: string;
+  note: string; // short free-text description shown on the tile
+  linkedProductId: string | null; // optional link to a registry DataProduct
+  daupProjectRef: string | null; // forward seam for daup-projects (deferred)
+  order: number; // position within its column
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RigourCheck {
   id?: string;
   documentId: string;
@@ -159,6 +181,9 @@ export interface StoreGraph {
   // Per-place role roster (schemaVersion ≥ 2). Empty/absent in the standalone v1
   // fallback, where identity comes from the seeded `users` picker instead.
   members?: PlaceMember[];
+  // Per-product roadmap tiles (schemaVersion ≥ 4). Absent/empty on older blobs; the
+  // store migration backfills [] so the Roadmap tab renders empty rather than crashing.
+  roadmapItems?: RoadmapItem[];
 }
 
 // The acting identity the sign gate reads. In v1 (and the standalone fallback) this

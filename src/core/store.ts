@@ -39,10 +39,12 @@ import type {
   DocContent,
   ActingUser,
   PlaceMember,
+  RoadmapItem,
+  RoadmapColumn,
 } from "../types";
 import type { RoleValue } from "./enums";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // ── intents (the only mutation surface) ────────────────────────────────────────
 export type Intent =
@@ -75,6 +77,14 @@ export type Intent =
   //    signature). Glossary import merges terms by case-insensitive term name. ──
   | { type: "IMPORT_DOCUMENT"; productId: string; docType: DocTypeValue; content: DocContent }
   | { type: "IMPORT_GLOSSARY"; productId: string; terms: Array<{ term: string; definition: string }> }
+  // ── per-product roadmap kanban (tiles = projects; CURRENT|PLANNED|FUTURE columns).
+  //    Ungated authoring (like the glossary); links to a registry product or a deferred
+  //    daup-projects ref. No lifecycle/gate interaction — a roadmap tile never touches
+  //    document status, rigour or signatures. ──
+  | { type: "ADD_ROADMAP_ITEM"; productId: string; column: RoadmapColumn; title: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null }
+  | { type: "EDIT_ROADMAP_ITEM"; itemId: string; title?: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null }
+  | { type: "MOVE_ROADMAP_ITEM"; itemId: string; column: RoadmapColumn }
+  | { type: "REMOVE_ROADMAP_ITEM"; itemId: string }
   // ── P3 house-session roster intents ──
   | { type: "ASSIGN_ROLE"; targetKey: string; role: RoleValue }
   | { type: "RENAME_MEMBER"; targetKey: string; name: string };
@@ -107,6 +117,7 @@ export interface Store {
   docsForProduct: (pid: string) => DuidelikDocument[];
   docOf: (pid: string, type: string) => DuidelikDocument | null;
   glossaryForProduct: (pid: string) => GlossaryTerm[];
+  roadmapForProduct: (pid: string) => RoadmapItem[];
   signatureForDoc: (did: string) => Signature | null;
   checksForDoc: (did: string) => RigourCheck[];
   placementIntact: (p: DataProduct) => boolean;
@@ -172,6 +183,11 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     // field reads as active. Bump the version so the shape is recorded.
     if (next.schemaVersion < 3) {
       next = { ...next, schemaVersion: 3 };
+    }
+    // v3 → v4: add the per-product roadmap tiles. Backfill [] so the Roadmap tab reads
+    // an array on an older blob instead of undefined.
+    if (next.schemaVersion < 4) {
+      next = { ...next, roadmapItems: next.roadmapItems ?? [], schemaVersion: 4 };
     }
     if (next.schemaVersion !== SCHEMA_VERSION) {
       next = { ...next, schemaVersion: SCHEMA_VERSION };
@@ -266,6 +282,10 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
   const docOf = (pid: string, type: string) => docsForProduct(pid).find((d) => d.type === type) || null;
   const glossaryForProduct = (pid: string) =>
     state.glossaryTerms.filter((t) => t.dataProductId === pid).sort((a, b) => a.term.localeCompare(b.term));
+  const roadmapForProduct = (pid: string) =>
+    (state.roadmapItems ?? [])
+      .filter((r) => r.dataProductId === pid)
+      .sort((a, b) => a.order - b.order);
   const signatureForDoc = (did: string): Signature | null => {
     const sigs = state.signatures.filter((s) => s.documentId === did);
     return sigs.length ? sigs[sigs.length - 1] : null;
@@ -550,6 +570,70 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
         return { ok: true, added, updated };
       }
 
+      case "ADD_ROADMAP_ITEM": {
+        const p = product(intent.productId);
+        if (!p) return { ok: false, code: "NOT_FOUND", message: "Product not found." };
+        const title = (intent.title ?? "").trim();
+        if (!title) return { ok: false, code: "EMPTY", message: "A roadmap tile needs a title." };
+        const items = state.roadmapItems ?? [];
+        // next order = end of the target column
+        const inCol = items.filter((r) => r.dataProductId === p.id && r.column === intent.column);
+        const order = inCol.reduce((m, r) => Math.max(m, r.order), -1) + 1;
+        const item: RoadmapItem = {
+          id: genId(),
+          dataProductId: p.id,
+          column: intent.column,
+          title,
+          note: (intent.note ?? "").trim(),
+          linkedProductId: intent.linkedProductId ?? null,
+          daupProjectRef: intent.daupProjectRef ?? null,
+          order,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        };
+        commit({ ...state, roadmapItems: [...items, item] });
+        return { ok: true, item };
+      }
+
+      case "EDIT_ROADMAP_ITEM": {
+        const items = state.roadmapItems ?? [];
+        const it = items.find((r) => r.id === intent.itemId);
+        if (!it) return { ok: false, code: "NOT_FOUND", message: "Roadmap tile not found." };
+        const title = intent.title != null ? intent.title.trim() : it.title;
+        if (!title) return { ok: false, code: "EMPTY", message: "A roadmap tile needs a title." };
+        const updated: RoadmapItem = {
+          ...it,
+          title,
+          note: intent.note != null ? intent.note.trim() : it.note,
+          linkedProductId: intent.linkedProductId !== undefined ? intent.linkedProductId : it.linkedProductId,
+          daupProjectRef: intent.daupProjectRef !== undefined ? intent.daupProjectRef : it.daupProjectRef,
+          updatedAt: now.toISOString(),
+        };
+        commit({ ...state, roadmapItems: upsert(items, updated) });
+        return { ok: true, item: updated };
+      }
+
+      case "MOVE_ROADMAP_ITEM": {
+        const items = state.roadmapItems ?? [];
+        const it = items.find((r) => r.id === intent.itemId);
+        if (!it) return { ok: false, code: "NOT_FOUND", message: "Roadmap tile not found." };
+        if (it.column === intent.column) return { ok: true, item: it }; // no-op
+        const inCol = items.filter((r) => r.dataProductId === it.dataProductId && r.column === intent.column);
+        const order = inCol.reduce((m, r) => Math.max(m, r.order), -1) + 1;
+        const updated: RoadmapItem = { ...it, column: intent.column, order, updatedAt: now.toISOString() };
+        commit({ ...state, roadmapItems: upsert(items, updated) });
+        return { ok: true, item: updated };
+      }
+
+      case "REMOVE_ROADMAP_ITEM": {
+        const items = state.roadmapItems ?? [];
+        if (!items.some((r) => r.id === intent.itemId)) {
+          return { ok: false, code: "NOT_FOUND", message: "Roadmap tile not found." };
+        }
+        commit({ ...state, roadmapItems: items.filter((r) => r.id !== intent.itemId) });
+        return { ok: true };
+      }
+
       case "PUBLISH_QRG": {
         const p = product(intent.productId)!;
         return apply(() => lc.publishQrg(p, docOf(p.id, DocType.QRG), { now }));
@@ -766,6 +850,7 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     docsForProduct,
     docOf,
     glossaryForProduct,
+    roadmapForProduct,
     signatureForDoc,
     checksForDoc,
     placementIntact,

@@ -317,9 +317,14 @@
   * { transition: none !important; }
 }
 
+/* ============================================================ roadmap kanban */
+.roadmap-tile { transition: border-color var(--dur) var(--ease); }
+.roadmap-tile:hover { border-color: #ffffff33; }
+
 /* ============================================================ responsive */
 @media (max-width: 860px) {
   .work-area { grid-template-columns: 1fr !important; }
   .registry-grid { grid-template-columns: 1fr !important; }
   .lifecycle-rail { flex-wrap: wrap; }
+  .roadmap-board { grid-template-columns: 1fr !important; }
 }

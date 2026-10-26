@@ -37,6 +37,7 @@ export function App({ store, aiClient }: { store: Store; aiClient: AiClient | nu
           productId={route.productId}
           aiClient={aiClient}
           onBack={() => setRoute({ view: "registry" })}
+          onOpenProduct={(id) => setRoute({ view: "product", productId: id })}
         />
       )}
     </div>
