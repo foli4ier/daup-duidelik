@@ -744,7 +744,7 @@ function RoadmapTab({
           <label className="field__label">daup-projects reference (optional)</label>
           <input
             className="field__input"
-            placeholder="project.daup.co.za URL or a project/place handle"
+            placeholder="projects.daup.co.za URL or a project/place handle"
             value={daupProjectRef}
             onChange={(e) => setDaupProjectRef(e.target.value)}
           />
