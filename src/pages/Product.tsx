@@ -629,16 +629,16 @@ function printDocument({
   resolveUser: (id: string) => any;
   checks: RigourCheck[];
 }) {
-  const esc = (s: unknown): string =>
-    String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+  const esc = escapeHtml;
   const title = docTypeTitle(docType);
   const content = (doc.content || {}) as Record<string, unknown>;
 
   const renderObj = (o: Record<string, unknown>): string =>
     Object.entries(o)
       .filter(([, val]) => val != null && val !== "")
-      .map(([k, val]) => "<b>" + esc(k) + ":</b> " + (Array.isArray(val) || typeof val === "object" ? renderVal(val) : esc(val)))
+      .map(([k, val]) => "<b>" + esc(k) + ":</b> " + (Array.isArray(val) || typeof val === "object" ? renderVal(val) : renderRichText(val)))
       .join(" &nbsp; ");
+  const renderText = renderRichText;
   const renderVal = (v: unknown): string => {
     if (v == null || v === "") return '<span class="muted">—</span>';
     if (Array.isArray(v)) {
@@ -646,7 +646,7 @@ function printDocument({
       return "<ul>" + v.map((it) => "<li>" + (it && typeof it === "object" ? renderObj(it as Record<string, unknown>) : esc(it)) + "</li>").join("") + "</ul>";
     }
     if (typeof v === "object") return renderObj(v as Record<string, unknown>);
-    return esc(v);
+    return renderText(v);
   };
 
   const sections = sectionsFor(docType)
@@ -694,6 +694,9 @@ function printDocument({
   .flabel { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:#889; }
   .fval { font-size:.9rem; }
   .muted { color:#aab; } ul { margin:4px 0 4px 18px; padding:0; } li { margin:2px 0; }
+  .fval p { margin:4px 0; }
+  ol.decision-list { margin:4px 0 4px 20px; padding:0; }
+  ol.decision-list li { margin:4px 0; padding-left:4px; line-height:1.45; }
   .btn { font:inherit; padding:8px 16px; border:1px solid #008b83; background:#008b83; color:#fff; border-radius:6px; cursor:pointer; }
   .foot { margin-top:24px; font-size:.68rem; color:#99a; border-top:1px solid #eee; padding-top:8px; }
 </style></head><body>
@@ -718,6 +721,43 @@ function printDocument({
 }
 
 // ── helpers ──
+
+// HTML-escape any value for safe insertion into the print window (no injection from
+// author content). Exported for reuse + testability.
+export function escapeHtml(s: unknown): string {
+  return String(s == null ? "" : s).replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string,
+  );
+}
+
+// Readable HTML for a free-text field in the printed doc. A long "Business decision"
+// is commonly written as an enumerated run-on ("1. … 2. … 3. …") or with hard line
+// breaks; printed as one escaped blob it collapses into an unreadable wall (the
+// reported BRD problem). So: an inline numbered run-on (≥2 "N."/"N)" markers) renders
+// as an ordered list; otherwise blank lines become paragraphs and single newlines
+// become <br>. Presentation only — stored content is never changed. Always escapes.
+export function renderRichText(v: unknown): string {
+  const raw = String(v == null ? "" : v);
+  if (!raw.trim()) return '<span class="muted">—</span>';
+  // Split before each "N." / "N)" enumerator that follows whitespace (so inner periods
+  // like "GEB vs." or "(CFO)" do not split). Require ≥2 numbered items.
+  const parts = raw
+    .split(/\s+(?=\d{1,2}[.)]\s)/g)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const numbered = parts.filter((p) => /^\d{1,2}[.)]\s/.test(p));
+  if (parts.length >= 2 && numbered.length >= 2) {
+    const items = parts.map((p) => "<li>" + escapeHtml(p.replace(/^\d{1,2}[.)]\s*/, "")) + "</li>").join("");
+    return '<ol class="decision-list">' + items + "</ol>";
+  }
+  const paras = raw
+    .split(/\n{2,}/)
+    .map((para) => para.trim())
+    .filter(Boolean);
+  return paras.map((para) => "<p>" + escapeHtml(para).replace(/\n/g, "<br>") + "</p>").join("");
+}
+
 function tabLabel(t: string) {
   return t === "GLOSSARY" ? "Glossary" : t;
 }
