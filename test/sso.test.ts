@@ -132,20 +132,25 @@ describe("P3.3 store in house mode — sign gate reads the roster", () => {
     expect(s.isHouseMode()).toBe(true);
     expect(s.actingMember()?.role).toBe(Role.PRODUCT_OWNER);
 
+    // A fresh house place has NO seeded sub-domains or products — the team registers
+    // their own. Create a sub-domain under a seeded enterprise domain first.
+    const domainId = s.getState().domains[0].id;
+    const sd = s.dispatch({ type: "CREATE_SUBDOMAIN", domainId, name: "Transport" }) as any;
     const reg = s.dispatch({
       type: "REGISTER_PRODUCT",
       code: "DAPP-H1",
       name: "House Product",
       oneLiner: "A non-empty one-liner.",
-      subDomainId: s.getState().subDomains[0].id,
+      subDomainId: sd.subDomain.id,
       ownerId: null,
     }) as any;
     const pid = reg.product.id;
     s.dispatch({ type: "CREATE_BRD", productId: pid });
     const brd = s.docOf(pid, DocType.BRD)!;
-    // Owner must resolve to a known user for brd.single_owner — in house mode the
-    // seeded users still exist in the graph, so point ownership at one of them.
-    const anOwner = s.getState().users[0].id;
+    // Owner must resolve for brd.single_owner. In house mode the owner is a ROSTER
+    // Product Owner — use the bootstrapped PO's roster key (resolveUser resolves it).
+    const anOwner = s.actingMember()!.key;
+    expect(s.ownerCandidates().some((o) => o.id === anOwner)).toBe(true);
     s.dispatch({
       type: "EDIT_DOCUMENT",
       documentId: brd.id,
@@ -172,16 +177,19 @@ describe("P3.3 store in house mode — sign gate reads the roster", () => {
     // BRD in rigour, and a second person on the roster as a non-PO. Handing this blob to
     // memoryAdapter(initial) avoids any cross-store debounce-write timing.
     const seedStore = createStore({ adapter: memoryAdapter(), genId: counterId(), clock: fixedClock, placeId: "seed", session: { peerId: "peer-po", phone: null } });
+    const poKey = seedStore.actingMember()!.key;
+    const domainId = seedStore.getState().domains[0].id;
+    const sd = seedStore.dispatch({ type: "CREATE_SUBDOMAIN", domainId, name: "Transport" }) as any;
     const reg = seedStore.dispatch({
       type: "REGISTER_PRODUCT", code: "DAPP-H2", name: "Shared", oneLiner: "non-empty",
-      subDomainId: seedStore.getState().subDomains[0].id, ownerId: seedStore.getState().users[0].id,
+      subDomainId: sd.subDomain.id, ownerId: poKey,
     }) as any;
     const pid = reg.product.id;
     seedStore.dispatch({ type: "CREATE_BRD", productId: pid });
     const brd = seedStore.docOf(pid, DocType.BRD)!;
     seedStore.dispatch({ type: "EDIT_DOCUMENT", documentId: brd.id, content: {
       decision: "Planners decide allocation each morning replacing the flat split.",
-      ownerId: seedStore.getState().users[0].id, successMetrics: [{ metric: "r", target: "95%" }],
+      ownerId: poKey, successMetrics: [{ metric: "r", target: "95%" }],
       outOfScope: ["Promo"], dataSources: [{ name: "SAP" }],
     } });
     seedStore.dispatch({ type: "START_RIGOUR", documentId: brd.id });
@@ -221,14 +229,52 @@ describe("P3.3 store in house mode — sign gate reads the roster", () => {
     const promoted = (ok.members as PlaceMember[]).find((m) => m.key === baKey)!;
     expect(promoted.role).toBe(Role.BUSINESS_ANALYST);
   });
+
+  it("owner-candidates come from the ROSTER's Product Owners in house mode (the dropdown fix)", () => {
+    // Build a place blob with a bootstrapped PO, then add a BA to the roster — the
+    // single-store scenario the UI actually has (one store per place).
+    const seed = createStore({ adapter: memoryAdapter(), genId: counterId(), clock: fixedClock, placeId: "oc", session: { peerId: "peer-po", phone: null } });
+    const poKey = seed.actingMember()!.key;
+    const blob = JSON.parse(seed.exportJson());
+    const baMember: PlaceMember = {
+      key: "peer:peer-ba", peerId: "peer-ba", phone: null, role: Role.BUSINESS_ANALYST,
+      name: "A. Botha", bootstrap: false, createdAt: fixedClock().toISOString(), updatedAt: fixedClock().toISOString(),
+    };
+    blob.members = [...(blob.members ?? []), baMember];
+
+    const po = createStore({ adapter: memoryAdapter(blob), genId: counterId(), clock: fixedClock, placeId: "oc", session: { peerId: "peer-po", phone: null } });
+
+    // Only the PO is an owner candidate; the BA (non-PO) is not.
+    let cands = po.ownerCandidates();
+    expect(cands.length).toBe(1);
+    expect(cands[0].id).toBe(poKey);
+    expect(cands.some((c) => c.id === baMember.key)).toBe(false);
+
+    // Promote the BA to a second Product Owner → it must now appear in the dropdown.
+    const promoted = po.dispatch({ type: "ASSIGN_ROLE", targetKey: baMember.key, role: Role.PRODUCT_OWNER }) as any;
+    expect(promoted.ok).toBe(true);
+    cands = po.ownerCandidates();
+    expect(cands.length).toBe(2);
+    expect(cands.some((c) => c.id === baMember.key)).toBe(true);
+    // ownerId set to a roster key still resolves to a name (print / display).
+    expect(po.resolveUser(baMember.key)?.name).toBe("A. Botha");
+  });
 });
 
 describe("P3.4 placeId scoping (O2 — shared per place)", () => {
-  it("two different placeIds get independent registries; same placeId shares the blob", () => {
+  it("a fresh house place seeds the enterprise tree only — no demo users, sub-domains or products", () => {
     const a1 = createStore({ genId: counterId(), clock: fixedClock, placeId: "place-A", session: { peerId: "p1", phone: null }, adapter: memoryAdapter() });
-    // A fresh adapter per store here means isolation by construction; the real scoping is
-    // the localStorage KEY (api/persistence.storageKey), tested below.
-    expect(a1.getState().dataProducts.length).toBe(2); // seeded sample
+    // A fresh HOUSE place must NOT inherit the demo seed (the reported bug): no sample
+    // C. Willemburg user, no Transport sub-domain, no Shepherd products. The fixed
+    // enterprise tree (streams + 10 domains, DATA-MODEL §6-C) IS seeded.
+    expect(a1.getState().dataProducts.length).toBe(0);
+    expect(a1.getState().subDomains.length).toBe(0);
+    expect(a1.getState().users.length).toBe(0);
+    expect(a1.getState().streams.length).toBe(2);
+    expect(a1.getState().domains.length).toBe(10);
+    // The only member is the bootstrapped redeemer (as PO), not a demo user.
+    expect(a1.members().length).toBe(1);
+    expect(a1.members()[0].role).toBe(Role.PRODUCT_OWNER);
   });
 
   it("the standalone store (no session) is NOT in house mode", () => {

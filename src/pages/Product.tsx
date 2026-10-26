@@ -245,7 +245,10 @@ function DocTab({
   const signedBrdKeys = signedBrd && signedBrd.status === DocStatus.SIGNED ? Object.keys(signedBrd.content || {}) : [];
   const ctx = {
     product,
-    users: state.users,
+    // The owner-picker's PO candidates: the roster's Product Owners in house mode, the
+    // seeded POs in standalone. (In standalone this is the same population as before,
+    // since OwnerPicker already filtered users to PRODUCT_OWNER.)
+    users: store.ownerCandidates(),
     placementPath,
     signedBrdKeys,
     onEditOneLiner: (next: string) => dispatch({ type: "EDIT_ONELINER", productId: product.id, oneLiner: next }),

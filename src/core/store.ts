@@ -99,6 +99,7 @@ export interface Store {
   dispatch: (intent: Intent) => DispatchResult | Promise<DispatchResult>;
   actingUser: () => User | null;
   resolveUser: (uid: string) => User | null;
+  ownerCandidates: () => User[];
   product: (pid: string) => DataProduct | null;
   activeProducts: () => DataProduct[];
   archivedProducts: () => DataProduct[];
@@ -154,7 +155,9 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     if (persisted && persisted.schemaVersion != null) {
       return migrate(persisted);
     }
-    const seed = buildSeed(genId, clock());
+    // A fresh HOUSE place seeds the enterprise tree only (no demo users/products);
+    // standalone/preview seeds the sample population. houseMode is known here.
+    const seed = buildSeed(genId, clock(), !houseMode);
     adapter.write(seed);
     return seed;
   }
@@ -234,7 +237,31 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
 
   const isHouseMode = () => houseMode;
 
-  const resolveUser = (uid: string) => state.users.find((u) => u.id === uid) || null;
+  // The population the BRD owner-picker should choose from (one accountable PO per
+  // product, DATA-MODEL §3 / brd.single_owner). In HOUSE mode this is the per-place
+  // ROSTER (members[] whose role is PRODUCT_OWNER), mapped to User shape with the
+  // member's stable key as id — so a PO added in the roster appears here, and the id
+  // stored on DataProduct.ownerId matches currentPersonId()'s keying. In standalone
+  // mode it is the seeded users picker. This is the fix for "a roster PO is missing
+  // from the owner dropdown": the picker must read the roster, not the demo users.
+  const ownerCandidates = (): User[] => {
+    if (houseMode) {
+      return members()
+        .filter((m) => m.role === Role.PRODUCT_OWNER)
+        .map((m) => ({ id: m.key, name: m.name, role: m.role }));
+    }
+    return state.users.filter((u) => u.role === Role.PRODUCT_OWNER);
+  };
+
+  // Resolve an id to a displayable User. Checks the seeded users first, then the roster
+  // (a house-mode owner id is a roster member key, not a seeded user id) so an ownerId
+  // set from the roster still resolves to a name in the UI and in print.
+  const resolveUser = (uid: string): User | null => {
+    const u = state.users.find((x) => x.id === uid);
+    if (u) return u;
+    const m = members().find((x) => x.key === uid);
+    return m ? { id: m.key, name: m.name, role: m.role } : null;
+  };
   const docsForProduct = (pid: string) => state.documents.filter((d) => d.dataProductId === pid);
   const docOf = (pid: string, type: string) => docsForProduct(pid).find((d) => d.type === type) || null;
   const glossaryForProduct = (pid: string) =>
@@ -719,7 +746,7 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     return { ok: true };
   }
   function reset(): { ok: true } {
-    const seed = buildSeed(genId, clock());
+    const seed = buildSeed(genId, clock(), !houseMode);
     commit(seed);
     actingUserId = state.users[0]?.id ?? null;
     return { ok: true };
@@ -731,6 +758,7 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
     dispatch,
     actingUser,
     resolveUser,
+    ownerCandidates,
     product,
     activeProducts,
     archivedProducts,
