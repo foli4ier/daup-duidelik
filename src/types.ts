@@ -96,6 +96,24 @@ export interface GlossaryTerm {
 // project-plan editor are a separate scoped piece (see this turn's scope decision).
 export type RoadmapColumn = "CURRENT" | "PLANNED" | "FUTURE";
 
+// A lightweight Project Charter captured on a roadmap tile at registration — the
+// product-side "why are we doing this" one-pager that kicks a project off, distinct
+// from the detailed Gantt/WBS plan (that lives in the daup-projects app, not duidelik:
+// SCOPE-roadmap-daup-projects-and-plan §B, CONCEPT §1). Every field is optional free
+// text so a charter is never a gate; the tile stores whatever the author fills in.
+// `milestones` and `stakeholders` are simple string lists (one entry per line in the
+// form). This structured shape also gives the future "＋ New project in Project ↗"
+// round-trip (LINK-BACK.md) something real to pre-fill from.
+export interface ProjectCharter {
+  purpose: string; // why this project exists — the problem/opportunity
+  scope: string; // what it covers (and, inline, what it does not)
+  objectives: string; // the concrete goals / definition of done
+  sponsor: string; // the accountable business sponsor
+  stakeholders: string[]; // key people/teams involved
+  milestones: string[]; // headline dates / checkpoints (free text, one per line)
+  risks: string; // known risks / assumptions / dependencies
+}
+
 export interface RoadmapItem {
   id: string;
   dataProductId: string;
@@ -104,6 +122,10 @@ export interface RoadmapItem {
   note: string; // short free-text description shown on the tile
   linkedProductId: string | null; // optional link to a registry DataProduct
   daupProjectRef: string | null; // forward seam for daup-projects (deferred)
+  // Optional project charter (added alongside daupProjectRef). Absent/null on tiles
+  // created before this field existed, and on tiles whose author skipped the charter —
+  // the Roadmap UI reads it defensively. Never a gated or signed artifact.
+  charter?: ProjectCharter | null;
   order: number; // position within its column
   createdAt: string;
   updatedAt: string;

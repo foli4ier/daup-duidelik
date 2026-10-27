@@ -136,6 +136,79 @@ describe("Roadmap — edit / move / remove", () => {
   });
 });
 
+describe("Roadmap — project charter", () => {
+  it("stores a structured charter on add (fields trimmed, lists cleaned)", () => {
+    const s = freshStore();
+    const pid = aProduct(s).id;
+    const add = s.dispatch({
+      type: "ADD_ROADMAP_ITEM", productId: pid, column: "CURRENT", title: "Charter tile",
+      charter: {
+        purpose: "  Replace the manual ECC flash-sales pull.  ",
+        scope: "GM flash sales only",
+        objectives: "Automate the daily feed",
+        sponsor: "G. Smith",
+        stakeholders: ["  BA team  ", "", "Finance"],
+        milestones: ["Kickoff — Q1", "   ", "Go-live — Q3"],
+        risks: "ECC extract window may move",
+      },
+    }) as any;
+    expect(add.ok).toBe(true);
+    const c = add.item.charter;
+    expect(c).not.toBeNull();
+    expect(c.purpose).toBe("Replace the manual ECC flash-sales pull."); // trimmed
+    expect(c.stakeholders).toEqual(["BA team", "Finance"]); // blanks dropped
+    expect(c.milestones).toEqual(["Kickoff — Q1", "Go-live — Q3"]); // blank dropped
+  });
+
+  it("collapses an all-empty charter to null (not a bag of empty strings)", () => {
+    const s = freshStore();
+    const pid = aProduct(s).id;
+    const add = s.dispatch({
+      type: "ADD_ROADMAP_ITEM", productId: pid, column: "CURRENT", title: "No charter",
+      charter: { purpose: "  ", scope: "", objectives: "", sponsor: "", stakeholders: ["", "  "], milestones: [], risks: "" },
+    }) as any;
+    expect(add.ok).toBe(true);
+    expect(add.item.charter).toBeNull();
+  });
+
+  it("a tile added with no charter has a null/absent charter", () => {
+    const s = freshStore();
+    const pid = aProduct(s).id;
+    const add = s.dispatch({ type: "ADD_ROADMAP_ITEM", productId: pid, column: "CURRENT", title: "Plain" }) as any;
+    expect(add.ok).toBe(true);
+    expect(add.item.charter ?? null).toBeNull();
+  });
+
+  it("edits the charter (undefined leaves it; a new object replaces it; empty clears to null)", () => {
+    const s = freshStore();
+    const pid = aProduct(s).id;
+    const add = s.dispatch({
+      type: "ADD_ROADMAP_ITEM", productId: pid, column: "CURRENT", title: "T",
+      charter: { purpose: "P1", scope: "", objectives: "", sponsor: "", stakeholders: [], milestones: [], risks: "" },
+    }) as any;
+    const id = add.item.id;
+    expect(add.item.charter.purpose).toBe("P1");
+
+    // Editing other fields WITHOUT passing charter leaves the charter intact.
+    const keep = s.dispatch({ type: "EDIT_ROADMAP_ITEM", itemId: id, note: "n" }) as any;
+    expect(keep.item.charter.purpose).toBe("P1");
+
+    // Passing a new charter replaces it.
+    const repl = s.dispatch({
+      type: "EDIT_ROADMAP_ITEM", itemId: id,
+      charter: { purpose: "P2", scope: "", objectives: "", sponsor: "", stakeholders: [], milestones: [], risks: "" },
+    }) as any;
+    expect(repl.item.charter.purpose).toBe("P2");
+
+    // Passing an all-empty charter clears it to null.
+    const clr = s.dispatch({
+      type: "EDIT_ROADMAP_ITEM", itemId: id,
+      charter: { purpose: "", scope: "", objectives: "", sponsor: "", stakeholders: [], milestones: [], risks: "" },
+    }) as any;
+    expect(clr.item.charter).toBeNull();
+  });
+});
+
 describe("Roadmap — persistence / migration", () => {
   it("an older blob with no roadmapItems migrates to an empty array (no crash)", () => {
     // A v3 blob (pre-roadmap) with roadmapItems absent.
