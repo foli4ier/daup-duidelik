@@ -685,6 +685,9 @@ function RoadmapTab({
     .sort((a, b) => a.order - b.order);
   // Candidate link targets: every active product in the registry except this one.
   const linkTargets = store.activeProducts().filter((p) => p.id !== productId);
+  // For printing a charter (breadcrumb + product header), mirroring printDocument.
+  const thisProduct = store.product(productId);
+  const placementPath = thisProduct ? pathFor(state, thisProduct) : "";
 
   const resetForm = () => {
     setTitle("");
@@ -982,7 +985,13 @@ function RoadmapTab({
       </div>
 
       {viewingCharter && viewingCharter.charter ? (
-        <CharterViewer item={viewingCharter} onClose={() => setViewingCharter(null)} onEdit={() => { const it = viewingCharter; setViewingCharter(null); beginEdit(it); }} />
+        <CharterViewer
+          item={viewingCharter}
+          product={thisProduct ?? undefined}
+          placementPath={placementPath}
+          onClose={() => setViewingCharter(null)}
+          onEdit={() => { const it = viewingCharter; setViewingCharter(null); beginEdit(it); }}
+        />
       ) : null}
     </div>
   );
@@ -991,7 +1000,19 @@ function RoadmapTab({
 // Read-only project-charter panel shown over the roadmap when a tile's "View charter"
 // is clicked. Pure presentation — it reads the already-normalized charter and never
 // mutates. Uses the shared modal/overlay classes from the theme (components.css).
-function CharterViewer({ item, onClose, onEdit }: { item: RoadmapItem; onClose: () => void; onEdit: () => void }) {
+function CharterViewer({
+  item,
+  product,
+  placementPath,
+  onClose,
+  onEdit,
+}: {
+  item: RoadmapItem;
+  product: DataProduct | undefined;
+  placementPath: string;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
   const c = item.charter!;
   const Field = ({ label, value }: { label: string; value: string }) =>
     value.trim() ? (
@@ -1033,6 +1054,15 @@ function CharterViewer({ item, onClose, onEdit }: { item: RoadmapItem; onClose: 
           <Field label="Risks / assumptions / dependencies" value={c.risks} />
         </div>
         <div className="modal__foot" style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "12px" }}>
+          {product ? (
+            <button
+              className="btn btn--ghost"
+              onClick={() => printCharter({ item, product, placementPath })}
+              title="Open a printable charter (print or save as PDF)"
+            >
+              🖨 Print charter
+            </button>
+          ) : null}
           <button className="btn btn--ghost" onClick={onEdit}>
             Edit charter
           </button>
@@ -1289,7 +1319,83 @@ function printDocument({
   w.document.close();
 }
 
-// Render an array of like-shaped objects as a readable table — one row per item, one
+// Print a roadmap tile's Project Charter in the SAME visual shell as printDocument
+// (brand strip, crumb, teal section headers, print button, pop-up handling) so a
+// charter prints identically to a BRD/FSD/QRG. Pure read — opens a print window,
+// mutates nothing. `item.charter` is already normalized (trimmed, blank list entries
+// dropped); empty fields/lists are simply omitted.
+function printCharter({
+  item,
+  product,
+  placementPath,
+}: {
+  item: RoadmapItem;
+  product: DataProduct;
+  placementPath: string;
+}) {
+  const esc = escapeHtml;
+  const c = item.charter;
+  if (!c) return;
+
+  const field = (label: string, value: string) =>
+    value && value.trim()
+      ? `<div class="field"><div class="flabel">${esc(label)}</div><div class="fval">${renderRichText(value)}</div></div>`
+      : "";
+  const list = (label: string, items: string[]) =>
+    items && items.length
+      ? `<div class="field"><div class="flabel">${esc(label)}</div><div class="fval"><ul>${items
+          .map((s) => "<li>" + esc(s) + "</li>")
+          .join("")}</ul></div></div>`
+      : "";
+
+  const columnLabel = ROADMAP_COLUMNS.find((col) => col.key === item.column)?.label || item.column;
+  const body =
+    field("Purpose", c.purpose) +
+    field("Scope", c.scope) +
+    field("Objectives", c.objectives) +
+    field("Sponsor", c.sponsor) +
+    list("Stakeholders", c.stakeholders) +
+    list("Key milestones", c.milestones) +
+    field("Risks / assumptions / dependencies", c.risks);
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(product.code)} — Project Charter — ${esc(
+    item.title,
+  )}</title>
+<style>
+  @media print { @page { margin: 18mm; } .noprint { display:none; } }
+  body { font-family: Inter, "Segoe UI", Arial, sans-serif; color:#111; max-width: 820px; margin: 24px auto; padding: 0 16px; line-height: 1.5; }
+  .strip { height:6px; background: linear-gradient(90deg,#e30613 0 46%,#fff 46% 49%,#008b83 49%); border-radius:3px; margin-bottom:16px; }
+  .crumb { font-size:.72rem; letter-spacing:.06em; color:#667; text-transform:uppercase; }
+  h1 { font-size:1.5rem; margin:4px 0 2px; }
+  .meta { font-size:.8rem; color:#445; margin-bottom:4px; }
+  .sig { font-size:.8rem; color:#036; background:#f0f7f6; border:1px solid #cde; border-radius:6px; padding:8px 10px; margin:10px 0 18px; }
+  h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; color:#008b83; border-bottom:1px solid #e3e7ea; padding-bottom:3px; margin:18px 0 8px; }
+  .field { margin:6px 0; }
+  .flabel { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:#889; }
+  .fval { font-size:.9rem; }
+  .muted { color:#aab; } ul { margin:4px 0 4px 18px; padding:0; } li { margin:2px 0; }
+  .fval p { margin:4px 0; }
+  .btn { font:inherit; padding:8px 16px; border:1px solid #008b83; background:#008b83; color:#fff; border-radius:6px; cursor:pointer; }
+  .foot { margin-top:24px; font-size:.68rem; color:#99a; border-top:1px solid #eee; padding-top:8px; }
+</style></head><body>
+  <div class="strip"></div>
+  <div class="crumb">${esc(placementPath)}</div>
+  <h1>Project Charter</h1>
+  <div class="meta">${esc(product.code)} — ${esc(product.name)} · Project: ${esc(item.title)} · Roadmap: ${esc(columnLabel)}</div>
+  <section><h2>Charter</h2>${body || '<div class="field"><div class="fval muted">No charter details recorded.</div></div>'}</section>
+  <div class="foot">Printed from duidelik · ${esc(new Date().toLocaleString())}</div>
+  <p class="noprint" style="margin-top:20px"><button class="btn" onclick="window.print()">Print / Save as PDF</button></p>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) {
+    alert("Pop-up blocked — allow pop-ups to print.");
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
 // column per field, headers title-cased ("metric" → "Metric"). Columns are the union
 // of keys in first-seen order. A cell that is itself an array/object is rendered
 // compactly (joined scalars / "k: v" pairs) so the table stays flat. Empty cells show
