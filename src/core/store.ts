@@ -41,10 +41,36 @@ import type {
   PlaceMember,
   RoadmapItem,
   RoadmapColumn,
+  ProjectCharter,
 } from "../types";
 import type { RoleValue } from "./enums";
 
 const SCHEMA_VERSION = 4;
+
+// Normalize an incoming charter: trim every text field, drop blank list entries, and
+// collapse a fully-empty charter to null (so a tile with no real charter stores null,
+// not a bag of empty strings). Pure — no I/O. Returns null for null/undefined input.
+function normalizeCharter(c: ProjectCharter | null | undefined): ProjectCharter | null {
+  if (!c) return null;
+  const clean: ProjectCharter = {
+    purpose: (c.purpose ?? "").trim(),
+    scope: (c.scope ?? "").trim(),
+    objectives: (c.objectives ?? "").trim(),
+    sponsor: (c.sponsor ?? "").trim(),
+    stakeholders: (c.stakeholders ?? []).map((s) => s.trim()).filter(Boolean),
+    risks: (c.risks ?? "").trim(),
+    milestones: (c.milestones ?? []).map((s) => s.trim()).filter(Boolean),
+  };
+  const hasContent =
+    clean.purpose ||
+    clean.scope ||
+    clean.objectives ||
+    clean.sponsor ||
+    clean.risks ||
+    clean.stakeholders.length > 0 ||
+    clean.milestones.length > 0;
+  return hasContent ? clean : null;
+}
 
 // ── intents (the only mutation surface) ────────────────────────────────────────
 export type Intent =
@@ -81,8 +107,8 @@ export type Intent =
   //    Ungated authoring (like the glossary); links to a registry product or a deferred
   //    daup-projects ref. No lifecycle/gate interaction — a roadmap tile never touches
   //    document status, rigour or signatures. ──
-  | { type: "ADD_ROADMAP_ITEM"; productId: string; column: RoadmapColumn; title: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null }
-  | { type: "EDIT_ROADMAP_ITEM"; itemId: string; title?: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null }
+  | { type: "ADD_ROADMAP_ITEM"; productId: string; column: RoadmapColumn; title: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null; charter?: ProjectCharter | null }
+  | { type: "EDIT_ROADMAP_ITEM"; itemId: string; title?: string; note?: string; linkedProductId?: string | null; daupProjectRef?: string | null; charter?: ProjectCharter | null }
   | { type: "MOVE_ROADMAP_ITEM"; itemId: string; column: RoadmapColumn }
   | { type: "REMOVE_ROADMAP_ITEM"; itemId: string }
   // ── P3 house-session roster intents ──
@@ -588,6 +614,7 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
           note: (intent.note ?? "").trim(),
           linkedProductId: intent.linkedProductId ?? null,
           daupProjectRef: intent.daupProjectRef ?? null,
+          charter: normalizeCharter(intent.charter),
           order,
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
@@ -608,6 +635,7 @@ export function createStore(opts: CreateStoreOpts = {}): Store {
           note: intent.note != null ? intent.note.trim() : it.note,
           linkedProductId: intent.linkedProductId !== undefined ? intent.linkedProductId : it.linkedProductId,
           daupProjectRef: intent.daupProjectRef !== undefined ? intent.daupProjectRef : it.daupProjectRef,
+          charter: intent.charter !== undefined ? normalizeCharter(intent.charter) : (it.charter ?? null),
           updatedAt: now.toISOString(),
         };
         commit({ ...state, roadmapItems: upsert(items, updated) });

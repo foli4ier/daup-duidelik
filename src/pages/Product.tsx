@@ -24,7 +24,7 @@ import { downloadTextFile, pickTextFile } from "../api/fileIo";
 import { buildOpenInProjectUrl } from "../api/projectLink";
 import { useSession } from "../context/SessionContext";
 import type { Store, Intent, DispatchResult } from "../core/store";
-import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck, RoadmapItem, RoadmapColumn } from "../types";
+import type { StoreGraph, DataProduct, DuidelikDocument, Signature, DocContent, RigourCheck, RoadmapItem, RoadmapColumn, ProjectCharter } from "../types";
 import type { AiClient } from "../core/aiClient";
 
 type TabKey = DocTypeValue | "GLOSSARY" | "ROADMAP";
@@ -652,6 +652,29 @@ function RoadmapTab({
   const [daupProjectRef, setDaupProjectRef] = useState<string>("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
+  // Charter form state (free text; lists are edited as one-per-line textareas).
+  const [charterOpen, setCharterOpen] = useState(false);
+  const [chPurpose, setChPurpose] = useState("");
+  const [chScope, setChScope] = useState("");
+  const [chObjectives, setChObjectives] = useState("");
+  const [chSponsor, setChSponsor] = useState("");
+  const [chStakeholders, setChStakeholders] = useState(""); // one per line
+  const [chMilestones, setChMilestones] = useState(""); // one per line
+  const [chRisks, setChRisks] = useState("");
+  // Charter being viewed read-only on a tile (null = none open).
+  const [viewingCharter, setViewingCharter] = useState<RoadmapItem | null>(null);
+
+  // Build a ProjectCharter from the form fields (lists split on newlines). The store
+  // normalizes/nulls an empty one, so we always pass the raw object.
+  const charterFromForm = (): ProjectCharter => ({
+    purpose: chPurpose,
+    scope: chScope,
+    objectives: chObjectives,
+    sponsor: chSponsor,
+    stakeholders: chStakeholders.split("\n"),
+    milestones: chMilestones.split("\n"),
+    risks: chRisks,
+  });
 
   // Place context for the Open-in-Project hints (house mode only; standalone has none).
   const session = useSession();
@@ -670,6 +693,14 @@ function RoadmapTab({
     setDaupProjectRef("");
     setAdding(null);
     setEditingId(null);
+    setCharterOpen(false);
+    setChPurpose("");
+    setChScope("");
+    setChObjectives("");
+    setChSponsor("");
+    setChStakeholders("");
+    setChMilestones("");
+    setChRisks("");
   };
 
   const submitAdd = async (column: RoadmapColumn) => {
@@ -681,6 +712,7 @@ function RoadmapTab({
       note,
       linkedProductId: linkedProductId || null,
       daupProjectRef: daupProjectRef.trim() || null,
+      charter: charterFromForm(),
     })) as any;
     if (res.ok) resetForm();
     else setWarn(res.message || "Could not add the tile.");
@@ -694,6 +726,7 @@ function RoadmapTab({
       note,
       linkedProductId: linkedProductId || null,
       daupProjectRef: daupProjectRef.trim() || null,
+      charter: charterFromForm(),
     })) as any;
     if (res.ok) resetForm();
     else setWarn(res.message || "Could not save the tile.");
@@ -706,6 +739,15 @@ function RoadmapTab({
     setNote(it.note);
     setLinkedProductId(it.linkedProductId || "");
     setDaupProjectRef(it.daupProjectRef || "");
+    const c = it.charter ?? null;
+    setCharterOpen(!!c);
+    setChPurpose(c?.purpose ?? "");
+    setChScope(c?.scope ?? "");
+    setChObjectives(c?.objectives ?? "");
+    setChSponsor(c?.sponsor ?? "");
+    setChStakeholders((c?.stakeholders ?? []).join("\n"));
+    setChMilestones((c?.milestones ?? []).join("\n"));
+    setChRisks(c?.risks ?? "");
     setWarn(null);
   };
 
@@ -752,6 +794,97 @@ function RoadmapTab({
             Adds an “Open in Project ↗” button. Opens the Project app (its own sign-in) — duidelik stores no project data.
           </div>
         </div>
+
+        {/* ── Project charter (optional, collapsible) ── */}
+        <div className="field">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            style={{ width: "100%", textAlign: "left", fontSize: ".72rem" }}
+            onClick={() => setCharterOpen((v) => !v)}
+            aria-expanded={charterOpen}
+          >
+            {charterOpen ? "▾" : "▸"} Project charter {charterOpen ? "" : "(optional)"}
+          </button>
+          <div className="rigour-gate__sub" style={{ margin: "4px 0 0", fontSize: ".66rem" }}>
+            A short “why we’re doing this” one-pager for this project. All fields optional — leave it blank to skip.
+            The detailed plan lives in the Project app.
+          </div>
+        </div>
+        {charterOpen ? (
+          <div className="card card--subtle stack gap-3" style={{ padding: "12px" }}>
+            <div className="field">
+              <label className="field__label">Purpose</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder="Why this project exists — the problem or opportunity."
+                value={chPurpose}
+                onChange={(e) => setChPurpose(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Scope</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder="What it covers — and what it explicitly does not."
+                value={chScope}
+                onChange={(e) => setChScope(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Objectives</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder="The concrete goals / definition of done."
+                value={chObjectives}
+                onChange={(e) => setChObjectives(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Sponsor</label>
+              <input
+                className="field__input"
+                placeholder="The accountable business sponsor."
+                value={chSponsor}
+                onChange={(e) => setChSponsor(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Stakeholders (one per line)</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder={"Person or team\nAnother stakeholder"}
+                value={chStakeholders}
+                onChange={(e) => setChStakeholders(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Key milestones (one per line)</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder={"Kickoff — Q1\nGo-live — Q3"}
+                value={chMilestones}
+                onChange={(e) => setChMilestones(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label">Risks / assumptions / dependencies</label>
+              <textarea
+                className="field__input"
+                style={{ minHeight: "48px", resize: "vertical" }}
+                placeholder="Known risks, assumptions and dependencies."
+                value={chRisks}
+                onChange={(e) => setChRisks(e.target.value)}
+              />
+            </div>
+          </div>
+        ) : null}
+
         <div className="row gap-3" style={{ justifyContent: "flex-end" }}>
           <button className="btn btn--ghost" onClick={resetForm}>
             Cancel
@@ -823,6 +956,7 @@ function RoadmapTab({
                       onEdit={() => beginEdit(it)}
                       onRemove={() => remove(it)}
                       onMove={(c) => move(it, c)}
+                      onViewCharter={() => setViewingCharter(it)}
                     />
                   ),
                 )}
@@ -846,6 +980,67 @@ function RoadmapTab({
           );
         })}
       </div>
+
+      {viewingCharter && viewingCharter.charter ? (
+        <CharterViewer item={viewingCharter} onClose={() => setViewingCharter(null)} onEdit={() => { const it = viewingCharter; setViewingCharter(null); beginEdit(it); }} />
+      ) : null}
+    </div>
+  );
+}
+
+// Read-only project-charter panel shown over the roadmap when a tile's "View charter"
+// is clicked. Pure presentation — it reads the already-normalized charter and never
+// mutates. Uses the shared modal/overlay classes from the theme (components.css).
+function CharterViewer({ item, onClose, onEdit }: { item: RoadmapItem; onClose: () => void; onEdit: () => void }) {
+  const c = item.charter!;
+  const Field = ({ label, value }: { label: string; value: string }) =>
+    value.trim() ? (
+      <div className="field" style={{ marginBottom: "10px" }}>
+        <div className="eyebrow eyebrow--muted">{label}</div>
+        <div style={{ fontSize: ".82rem", color: "var(--fg-2)", whiteSpace: "pre-wrap", marginTop: "3px" }}>{value}</div>
+      </div>
+    ) : null;
+  const List = ({ label, items }: { label: string; items: string[] }) =>
+    items.length ? (
+      <div className="field" style={{ marginBottom: "10px" }}>
+        <div className="eyebrow eyebrow--muted">{label}</div>
+        <ul style={{ margin: "4px 0 0", paddingLeft: "18px", fontSize: ".82rem", color: "var(--fg-2)" }}>
+          {items.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: "640px" }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal__head">
+          <div>
+            <div className="eyebrow eyebrow--teal">Project charter</div>
+            <div style={{ fontWeight: 800, fontSize: ".9rem", marginTop: "2px" }}>{item.title}</div>
+          </div>
+          <span role="button" tabIndex={0} style={{ cursor: "pointer", color: "var(--label)" }} onClick={onClose} title="Close">
+            ✕
+          </span>
+        </div>
+        <div className="modal__body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
+          <Field label="Purpose" value={c.purpose} />
+          <Field label="Scope" value={c.scope} />
+          <Field label="Objectives" value={c.objectives} />
+          <Field label="Sponsor" value={c.sponsor} />
+          <List label="Stakeholders" items={c.stakeholders} />
+          <List label="Key milestones" items={c.milestones} />
+          <Field label="Risks / assumptions / dependencies" value={c.risks} />
+        </div>
+        <div className="modal__foot" style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "12px" }}>
+          <button className="btn btn--ghost" onClick={onEdit}>
+            Edit charter
+          </button>
+          <button className="btn btn--ai" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -858,6 +1053,7 @@ function RoadmapTile({
   onEdit,
   onRemove,
   onMove,
+  onViewCharter,
 }: {
   item: RoadmapItem;
   linked: DataProduct | null;
@@ -866,6 +1062,7 @@ function RoadmapTile({
   onEdit: () => void;
   onRemove: () => void;
   onMove: (column: RoadmapColumn) => void;
+  onViewCharter: () => void;
 }) {
   const others = ROADMAP_COLUMNS.filter((c) => c.key !== item.column);
   // A-i: build the Open-in-Project deep link from the tile's ref + place context.
@@ -935,6 +1132,16 @@ function RoadmapTile({
         </div>
       ) : null}
       <div className="row gap-2" style={{ marginTop: "10px", flexWrap: "wrap" }}>
+        {item.charter ? (
+          <button
+            className="btn btn--ghost"
+            style={{ fontSize: ".66rem", padding: "4px 8px" }}
+            title="View this project's charter"
+            onClick={onViewCharter}
+          >
+            📋 Charter
+          </button>
+        ) : null}
         {others.map((c) => (
           <button
             key={c.key}
